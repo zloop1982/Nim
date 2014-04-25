@@ -654,36 +654,23 @@ proc getOperator(L: var TLexer, tok: var TToken) =
 
 proc scanComment(L: var TLexer, tok: var TToken) = 
   var pos = L.bufpos
-  var buf = L.buf 
-  # a comment ends if the next line does not start with the # on the same
-  # column after only whitespace
+  var buf = L.buf
+  assert buf[pos+1] == '#'
   tok.tokType = tkComment
   # iNumber contains the number of '\n' in the token
   tok.iNumber = 0
-  var col = getColNumber(L, pos)
   while true:
-    var lastBackslash = -1
     while buf[pos] notin {CR, LF, nimlexbase.EndOfFile}:
-      if buf[pos] == '\\': lastBackslash = pos+1
       add(tok.literal, buf[pos])
       inc(pos)
-    if lastBackslash > 0:
-      # a backslash is a continuation character if only followed by spaces
-      # plus a newline:
-      while buf[lastBackslash] == ' ': inc(lastBackslash)
-      if buf[lastBackslash] notin {CR, LF, nimlexbase.EndOfFile}:
-        # false positive:
-        lastBackslash = -1
-
     pos = handleCRLF(L, pos)
     buf = L.buf
     var indent = 0
     while buf[pos] == ' ': 
       inc(pos)
       inc(indent)
-    if buf[pos] == '#' and (col == indent or lastBackslash > 0):
+    if buf[pos] == '#' and buf[pos+1] == '#':
       tok.literal.add "\n"
-      col = indent
       inc tok.iNumber
     else:
       if buf[pos] > ' ': 
@@ -700,7 +687,7 @@ proc skip(L: var TLexer, tok: var TToken) =
     of ' ':
       inc(pos)
       inc(tok.strongSpaceA)
-    of Tabulator:
+    of '\t':
       lexMessagePos(L, errTabulatorsAreNotAllowed, pos)
       inc(pos)
     of CR, LF:
@@ -711,10 +698,14 @@ proc skip(L: var TLexer, tok: var TToken) =
         inc(pos)
         inc(indent)
       tok.strongSpaceA = 0
-      if buf[pos] > ' ':
+      if buf[pos] > ' ' and (buf[pos] != '#' or buf[pos+1] == '#'):
         tok.indent = indent
         L.currLineIndent = indent
         break
+    of '#':
+      # do not skip documentation comment:
+      if buf[pos+1] == '#': break
+      while buf[pos] notin {CR, LF, nimlexbase.EndOfFile}: inc(pos)
     else:
       break                   # EndOfFile also leaves the loop
   L.bufpos = pos
