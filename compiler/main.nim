@@ -201,7 +201,10 @@ proc commandSuggest =
     # issuing the first compile command. This will leave the compiler
     # cache in a state where "no recompilation is necessary", but the
     # cgen pass was never executed at all.
-    commandCompileToC()
+    # commandCompileToC()
+    semanticPasses()
+    registerPass(cgenPass)
+    compileProject()
     if gDirtyBufferIdx != 0:
       discard compileModule(gDirtyBufferIdx, {sfDirty})
       resetModule(gDirtyBufferIdx)
@@ -424,6 +427,7 @@ proc mainCommand* =
     commandEval(mainCommandArg())
   of "reset":
     resetMemory()
+    gGlobalOptions.incl(optCaasEnabled)
   of "idetools":
     gCmd = cmdIdeTools
     if gEvalExpr != "":

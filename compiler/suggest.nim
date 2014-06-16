@@ -286,6 +286,7 @@ proc resetSourceMap*(fileIdx: int32) =
   gSourceMaps[fileIdx].lines = @[]
 
 proc addToSourceMap(sym: PSym, info: TLineInfo) =
+  # echo("Adding to source map: ", sym.name.s, " ", info.fileIndex, " ", info.line, " ", info.col)
   ensureIdx(gSourceMaps, info.fileIndex)
   ensureSeq(gSourceMaps[info.fileIndex].lines)
   ensureIdx(gSourceMaps[info.fileIndex].lines, info.line)
@@ -298,14 +299,15 @@ proc defFromLine(entries: var seq[TEntry], col: int32) =
   # No need to pay the price for it unless the user requests
   # "goto definition" on a particular line
   sort(entries) do (a,b: TEntry) -> int:
-    return cmp(a.pos, b.pos)
+    return cmp(b.pos, a.pos)
   
   for e in entries:
     # currently, the line-infos for most expressions point to
     # one position past the end of the expression. This means
     # that the first expr that ends after the cursor column is
     # the one we are looking for.
-    if e.pos >= col:
+    # echo(e.pos, " ", col)
+    if col >= e.pos:
       suggestWriteln(symToStr(e.sym, isLocal=false, sectionDef))
       return
 
@@ -313,7 +315,7 @@ proc defFromSourceMap*(i: TLineInfo) =
   if not ((i.fileIndex < gSourceMaps.len) and
           (gSourceMaps[i.fileIndex].lines != nil) and
           (i.line < gSourceMaps[i.fileIndex].lines.len)): return
-  
+  # echo "defFromSourceMap ", i.fileIndex, " ", i.line, " ", i.col
   defFromLine(gSourceMaps[i.fileIndex].lines[i.line].entries, i.col)
 
 proc suggestSym*(n: PNode, s: PSym) {.inline.} =
