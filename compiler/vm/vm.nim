@@ -44,6 +44,7 @@ type
                               # parameters come first
     next: PStackFrame         # for stacking
     comesFrom: int
+    firstArg, argsLen, resultPos: Byte # used when frame is passed to callback
     safePoints: seq[int]      # used for exception handling
                               # XXX 'break' should perform cleanup actions
                               # What does the C backend do for it?
@@ -140,6 +141,51 @@ template createStr(x) =
 
 template createSet(x) =
   x.node = newNode(nkCurly)
+
+proc argsLen*(f: VmFrame): Natural =
+  ## returns the number of arguments that this frame contains. Normally you
+  ## should already know this number due to nimrod's static typing.
+  result = Natural(cast[PStackFrame](f).argsLen)
+
+proc getInt*(f: VmFrame; index: Natural): BiggestInt =
+  ## returns the value of the index'th slot in the frame. The slot has to be
+  ## of the type:  int|int16|...
+  let f = cast[PStackFrame](f)
+  result = f.slots[index + f.firstArg].intVal
+
+proc getFloat*(f: VmFrame; index: Natural): BiggestFloat =
+  ## returns the value of the index'th slot in the frame. The slot has to be
+  ## of the type:  float|float32|float64  or a distinct type of float or a
+  ## float range.
+  let f = cast[PStackFrame](f)
+  result = f.slots[index + f.firstArg].floatVal
+
+proc getString*(f: VmFrame; index: Natural): string =
+  ## returns the value of the index'th slot in the frame. The slot has to be
+  ## of the type string.
+  let f = cast[PStackFrame](f)
+  result = f.slots[index + f.firstArg].n.strVal
+
+template rawSetResult(a, k, field) {.immediate, dirty.} =
+  if a.kind != k:
+    myreset a
+    a.kind = k
+  a.field = x
+
+proc setResultInt*(f: VmFrame; x: BiggestInt) =
+  ## sets the result value of the wrapped proc.
+  let f = cast[PStackFrame](f)
+  rawSetResult(f.slots[f.firstArg-1], rkInt, intVal)
+
+proc setResultFloat*(f: VmFrame; x: BiggestFloat) =
+  ## sets the result value of the wrapped proc.
+  let f = cast[PStackFrame](f)
+  rawSetResult(f.slots[f.firstArg-1], rkFloat, floatVal)
+
+proc setResultString*(f: VmFrame; x: string) =
+  ## sets the result value of the wrapped proc.
+  let f = cast[PStackFrame](f)
+  rawSetResult(f.slots[f.firstArg-1], rkStr, n.strVal)
 
 proc moveConst(x: var TFullReg, y: TFullReg) =
   if x.kind != y.kind:
@@ -791,7 +837,12 @@ proc rawExecute(c: PCtx, start: int, tos: PStackFrame): TFullReg =
       let bb = regs[rb].node
       let isClosure = bb.kind == nkPar
       let prc = if not isClosure: bb.sym else: bb.sons[0].sym
-      if sfImportc in prc.flags:
+      if prc.offset < 0:
+        tos.firstArg = rb
+        tos.argsLen = rc
+        tos.resultPos = ra
+        c.vmProcs[-prc.offset - 1].prc(tos)
+      elif sfImportc in prc.flags:
         if allowFFI notin c.features:
           globalError(c.debug[pc], errGenerated, "VM not allowed to do FFI")
         # we pass 'tos.slots' instead of 'regs' so that the compiler can keep

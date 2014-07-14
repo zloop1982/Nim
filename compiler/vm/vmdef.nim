@@ -10,7 +10,7 @@
 ## This module contains the type definitions for the new evaluation engine.
 ## An instruction is 1-3 int32s in memory, it is a register based VM.
 
-import ast, passes, msgs, intsets
+import ast, passes, msgs, intsets, strtabs
 
 const
   byteExcess* = 128 # we use excess-K for immediates
@@ -170,7 +170,13 @@ type
     sym*: PSym
     slots*: array[TRegister, tuple[inUse: bool, kind: TSlotKind]]
     maxSlots*: int
-    
+
+  VmFrame* = distinct pointer
+  VmProc* = proc (f: VmFrame) {.closure.}
+
+  VmSym* = object
+    name*: string
+    prc*: VmProc
   PCtx* = ref TCtx
   TCtx* = object of passes.TPassContext # code gen context
     code*: seq[TInstr]
@@ -188,6 +194,8 @@ type
     features*: TSandboxFlags
     traceActive*: bool
     loopIterations*: int
+    vmProcs*: seq[VmSym]
+    marked*: PStringTable
 
   TPosition* = distinct int
 
@@ -196,7 +204,8 @@ type
 proc newCtx*(module: PSym): PCtx =
   PCtx(code: @[], debug: @[],
     globals: newNode(nkStmtListExpr), constants: newNode(nkStmtList), types: @[],
-    prc: PProc(blocks: @[]), module: module, loopIterations: MaxLoopIterations)
+    prc: PProc(blocks: @[]), module: module, loopIterations: MaxLoopIterations,
+    vmProcs: @[], marked: nil)
 
 proc refresh*(c: PCtx, module: PSym) =
   c.module = module

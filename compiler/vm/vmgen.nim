@@ -29,7 +29,7 @@
 
 import
   unsigned, strutils, ast, astalgo, types, msgs, renderer, vmdef, 
-  trees, intsets, rodread, magicsys, options, lowerings
+  trees, intsets, rodread, magicsys, options, lowerings, strtabs, idents
 
 from os import splitFile
 
@@ -1470,6 +1470,28 @@ proc genTupleConstr(c: PCtx, n: PNode, dest: var TDest) =
 
 proc genProc*(c: PCtx; s: PSym): int
 
+proc `=~`(s: PSym; name: string): bool =
+  let a = name.split('.')
+  var s = s
+  for i in countdown(a.high, a.low):
+    if s == nil or not identEq(s.name, a[i]): return false
+    s = s.owner
+  return true
+
+proc getVmProcSlot(c: PCtx; s: PSym): int =
+  for i in 0..high(c.vmProcs):
+    if s =~ c.vmProcs[i].name: return i
+  result = -1
+
+proc registerProc*(c: PCtx; name: string; procedure: VmProc) =
+  ## provides an implementation for a proc that is preferred over the proc's
+  ## body. This is used to provide operations that otherwise would require FFI
+  ## support.
+  c.vmProcs.add VmSym(name: name, prc: procedure)
+  if c.marked == nil: c.marked = newStringTable(modeStyleInsensitive)
+  let a = name.split('.')
+  c.marked[a[a.high]] = ""
+
 proc gen(c: PCtx; n: PNode; dest: var TDest; flags: TGenFlags = {}) =
   case n.kind
   of nkSym:
@@ -1481,6 +1503,9 @@ proc gen(c: PCtx; n: PNode; dest: var TDest; flags: TGenFlags = {}) =
     of skProc, skConverter, skMacro, skTemplate, skMethod, skIterators:
       # 'skTemplate' is only allowed for 'getAst' support:
       if sfImportc in s.flags: c.importcSym(n.info, s)
+      if c.marked != nil and c.marked.hasKey(s.name.s) and s.offset == 0:
+        let idx = getVmProcSlot(c, s)
+        if idx >= 0: s.offset = -idx-1
       genLit(c, n, dest)
     of skConst:
       gen(c, s.ast, dest)

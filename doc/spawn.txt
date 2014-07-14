@@ -93,6 +93,5 @@ variables at the same time:
 Like the ``parallel`` statement data flow variables ensure that no data races
 are possible. Due to technical limitations not every type ``T`` is possible in
 a data flow variable: ``T`` has to be of the type ``ref``, ``string``, ``seq``
-or of a type that doesn't contain a type that is garbage collected. This
-restriction will be removed in the future.
-
+or of a type that doesn't contain a type that describes garbage collected
+memory. This restriction may be removed in the future.

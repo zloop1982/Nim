@@ -277,8 +277,7 @@ when noTimeMachine:
     ##
     ## The whole proc is optional and will ignore all kinds of errors. The only
     ## way to be sure that it works is to call ``tmutil isexcluded path``.
-    if alreadyExcludedDirs.contains(dir): return
-    alreadyExcludedDirs.incl(dir)
+    if alreadyExcludedDirs.containsOrIncl(dir): return
     try:
       var p = startProcess("/usr/bin/tmutil", args = ["addexclusion", dir])
       discard p.waitForExit
