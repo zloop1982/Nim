@@ -114,8 +114,10 @@ proc processClient(client: PAsyncSocket, address: string,
       return
     let lineParts = line.split(' ')
     if lineParts.len != 3:
-      await request.respond(Http400, "Invalid request. Got: " & line)
-      continue
+      echo("About to raise")
+      raise newException(EBase, "FUCK YA")
+      #await request.respond(Http400, "Invalid request. Got: " & line)
+      #continue
 
     let reqMethod = lineParts[0]
     let path = lineParts[1]
@@ -198,7 +200,13 @@ proc serve*(server: PAsyncHttpServer, port: TPort,
     # TODO: Causes compiler crash.
     #var (address, client) = await server.socket.acceptAddr()
     var fut = await server.socket.acceptAddr()
-    asyncCheck processClient(fut.client, fut.address, callback)
+    var f = processClient(fut.client, fut.address, callback)
+    #echo(f.isNil)
+    #echo(f.repr)
+    f.callback =
+      proc () =
+        echo("processClient end")
+        echo(f.failed)
 
 proc close*(server: PAsyncHttpServer) =
   ## Terminates the async http server instance.

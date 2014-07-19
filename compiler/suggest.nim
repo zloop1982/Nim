@@ -325,7 +325,7 @@ proc suggestSym*(info: TLineInfo; s: PSym) {.inline.} =
   if isServing:
     addToSourceMap(s, info)
 
-proc markUsed(info: TLineInfo; s: PSym) =
+proc markUsed*(info: TLineInfo; s: PSym) =
   incl(s.flags, sfUsed)
   if {sfDeprecated, sfError} * s.flags != {}:
     if sfDeprecated in s.flags: message(info, warnDeprecated, s.name.s)

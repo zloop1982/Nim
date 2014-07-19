@@ -61,7 +61,9 @@ proc checkFinished[T](future: PFuture[T]) =
       echo("Contents: ", future.value.repr)
     echo("<----->")
     echo("Future already finished, cannot finish twice.")
-    assert false
+    echo getStackTrace()
+    quit()
+    #assert false
 
 proc complete*[T](future: PFuture[T], val: T) =
   ## Completes ``future`` with value ``val``.
@@ -836,16 +838,22 @@ template createCb*(retFutureSym, iteratorNameSym,
   var nameIterVar = iteratorNameSym
   #{.push stackTrace: off.}
   proc cb {.closure,gcsafe.} =
+    echo("cb")
     try:
       if not nameIterVar.finished:
+        echo("Executing iter")
         var next = nameIterVar()
+        echo(next.isNil, " ", next == nil, " ", nameIterVar.finished)
         if next == nil:
           assert retFutureSym.finished, "Async procedure's (" &
                  name & ") return Future was not finished."
         else:
           next.callback = cb
     except:
+      echo(getCurrentExceptionMsg())
+      echo(retFutureSym.stackTrace)
       retFutureSym.fail(getCurrentException())
+      echo("hello")
   cb()
   #{.pop.}
 proc generateExceptionCheck(futSym,
@@ -1068,8 +1076,8 @@ macro async*(prc: stmt): stmt {.immediate.} =
   result[6] = outerProcBody
 
   #echo(treeRepr(result))
-  #if prc[0].getName == "routeReq":
-  #echo(toStrLit(result))
+  if prc[0].getName == "processClient":
+    echo(toStrLit(result))
 
 proc recvLine*(socket: TAsyncFD): PFuture[string] {.async.} =
   ## Reads a line of data from ``socket``. Returned future will complete once

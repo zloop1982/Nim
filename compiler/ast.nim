@@ -768,6 +768,8 @@ type
                               # it won't cause problems
   
   TTypeSeq* = seq[PType]
+  TTypeAttachedOp* = enum
+    attachedDestructor, attachedAsgn, attachedDeepCopy
   TType* {.acyclic.} = object of TIdObj # \
                               # types are identical iff they have the
                               # same id; there may be multiple copies of a type
@@ -785,12 +787,13 @@ type
                               # the body of the user-defined type class
                               # formal param list
                               # else: unused
-    destructor*: PSym         # destructor. warning: nil here may not necessary
-                              # mean that there is no destructor.
-                              # see instantiateDestructor in types.nim
     owner*: PSym              # the 'owner' of the type
     sym*: PSym                # types have the sym associated with them
                               # it is used for converting types to strings
+    attachedOp*: array[TTypeAttachedOp, PSym] # \
+                              # destructor. warning: nil here may not necessary
+                              # mean that there is no destructor.
+                              # see instantiateDestructor in types.nim
     size*: BiggestInt         # the size of the type in bytes
                               # -1 means that the size is unkwown
     align*: int               # the type's alignment requirements
@@ -1189,7 +1192,7 @@ proc assignType(dest, src: PType) =
   dest.n = src.n
   dest.size = src.size
   dest.align = src.align
-  dest.destructor = src.destructor
+  dest.attachedOps = src.attachedOps
   # this fixes 'type TLock = TSysLock':
   if src.sym != nil:
     if dest.sym != nil:

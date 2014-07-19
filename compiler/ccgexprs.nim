@@ -214,9 +214,9 @@ proc optAsgnLoc(a: TLoc, t: PType, field: PRope): TLoc =
 proc genOptAsgnTuple(p: BProc, dest, src: TLoc, flags: TAssignmentFlags) =
   let newflags =
     if src.k == locData:
-      flags + { needToCopy }
+      flags + {needToCopy}
     elif tfShallow in dest.t.flags:
-      flags - { needToCopy }
+      flags - {needToCopy}
     else:
       flags
   for i in 0 .. <dest.t.len:
@@ -230,9 +230,9 @@ proc genOptAsgnObject(p: BProc, dest, src: TLoc, flags: TAssignmentFlags,
   if t == nil: return
   let newflags =
     if src.k == locData:
-      flags + { needToCopy }
+      flags + {needToCopy}
     elif tfShallow in dest.t.flags:
-      flags - { needToCopy }
+      flags - {needToCopy}
     else:
       flags
   case t.kind

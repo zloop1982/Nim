@@ -42,7 +42,7 @@ proc doDestructorStuff(c: PContext, s: PSym, n: PNode) =
       localError(n.info, errDestructorNotGenericEnough)
       return
   
-  t.destructor = s
+  t.attachedOp[attachedDestructor] = s
   # automatically insert calls to base classes' destructors
   if n.sons[bodyPos].kind != nkEmpty:
     for i in countup(0, t.sonsLen - 1):
@@ -52,7 +52,7 @@ proc doDestructorStuff(c: PContext, s: PSym, n: PNode) =
       let destructableT = instantiateDestructor(c, t.sons[i])
       if destructableT != nil:
         n.sons[bodyPos].addSon(newNode(nkCall, t.sym.info, @[
-            useSym(destructableT.destructor),
+            useSym(destructableT.attachedOp[attachedDestructor]),
             n.sons[paramsPos][1][0]]))
 
 proc destroyFieldOrFields(c: PContext, field: PNode, holder: PNode): PNode
@@ -61,7 +61,7 @@ proc destroySym(c: PContext, field: PSym, holder: PNode): PNode =
   let destructableT = instantiateDestructor(c, field.typ)
   if destructableT != nil:
     result = newNode(nkCall, field.info, @[
-      useSym(destructableT.destructor),
+      useSym(destructableT.attachedOp[attachedDestructor]),
       newNode(nkDotExpr, field.info, @[holder, useSym(field)])])
 
 proc destroyCase(c: PContext, n: PNode, holder: PNode): PNode =
@@ -128,10 +128,10 @@ proc instantiateDestructor(c: PContext, typ: PType): PType =
   let typeHoldingUserDefinition = if t.kind == tyGenericInst: t.base
                                   else: t
   
-  if typeHoldingUserDefinition.destructor != nil:
+  if typeHoldingUserDefinition.attachedOp[attachedDestructor] != nil:
     # XXX: This is not entirely correct for recursive types, but we need
     # it temporarily to hide the "destroy is already defined" problem
-    if typeHoldingUserDefinition.destructor notin
+    if typeHoldingUserDefinition.attachedOp[attachedDestructor] notin
         [analyzingDestructor, destructorIsTrivial]:
       return typeHoldingUserDefinition
     else:
@@ -143,12 +143,12 @@ proc instantiateDestructor(c: PContext, typ: PType): PType =
     if instantiateDestructor(c, t.sons[0]) != nil:
       if rangeDestructorProc == nil:
         rangeDestructorProc = searchInScopes(c, getIdent"nimDestroyRange")
-      t.destructor = rangeDestructorProc
+      t.attachedOp[attachedDestructor] = rangeDestructorProc
       return t
     else:
       return nil
   of tyTuple, tyObject:
-    t.destructor = analyzingDestructor
+    t.attachedOp[attachedDestructor] = analyzingDestructor
     let generated = generateDestructor(c, t)
     if generated != nil:
       internalAssert t.sym != nil
@@ -169,10 +169,10 @@ proc instantiateDestructor(c: PContext, typ: PType): PType =
         generated
         ])
       let semantizedDef = semProc(c, fullDef)
-      t.destructor = semantizedDef[namePos].sym
+      t.attachedOp[attachedDestructor] = semantizedDef[namePos].sym
       return t
     else:
-      t.destructor = destructorIsTrivial
+      t.attachedOp[attachedDestructor] = destructorIsTrivial
       return nil
   else:
     return nil
@@ -226,7 +226,7 @@ proc insertDestructors(c: PContext,
       tryStmt.addSon(
         newNode(nkFinally, info, @[
           semStmt(c, newNode(nkCall, info, @[
-            useSym(destructableT.destructor),
+            useSym(destructableT.attachedOp[attachedDestructor]),
             useSym(varId.sym)]))]))
 
       result.outer = newNodeI(nkStmtList, info)

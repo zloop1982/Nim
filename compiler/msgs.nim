@@ -332,7 +332,7 @@ const
     errUsingNoSymbol: "'$1' is not a variable, constant or a proc name",
     errMacroBodyDependsOnGenericTypes: "the macro body cannot be compiled, " &
                                        "because the parameter '$1' has a generic type",
-    errDestructorNotGenericEnough: "Destructor signarue is too specific. " &
+    errDestructorNotGenericEnough: "Destructor signature is too specific. " &
                                    "A destructor must be associated will all instantiations of a generic type",
     errInlineIteratorsAsProcParams: "inline iterators can be used as parameters only for " &
                                     "templates, macros and other inline iterators",
