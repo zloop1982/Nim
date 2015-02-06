@@ -117,6 +117,13 @@ type
     extensionLoaders*: array['0'..'9', PRope] # special procs for the
                                               # OpenGL wrapper
     injectStmt*: PRope
+    asmSections*: AsmFileSections ## assembly code generated for this module.
+                                  ## only applicable when the backend used
+                                  ## is asm.
+
+  AsmFileSection* = enum
+    afsProcs, afsGlobals
+  AsmFileSections* = array[AsmFileSection, string]
 
 var
   mainModProcs*, mainModInit*, otherModsInit*, mainDatInit*: PRope

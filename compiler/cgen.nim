@@ -15,7 +15,7 @@ import
   nversion, nimsets, msgs, crc, bitsets, idents, lists, types, ccgutils, os,
   times, ropes, math, passes, rodread, wordrecg, treetab, cgmeth, condsyms,
   rodutils, renderer, idgen, cgendata, ccgmerge, semfold, aliases, lowerings,
-  semparallel
+  semparallel, asmgen
 
 when options.hasTinyCBackend:
   import tccgen
@@ -763,6 +763,10 @@ proc closureSetup(p: BProc, prc: PSym) =
           rdLoc(env.loc), getTypeDesc(p.module, env.typ))
 
 proc genProcAux(m: BModule, prc: PSym) =
+  if prc.info ?? "asmtest.nim":
+    debug prc.ast
+    asmgen.genProc(m, prc)
+    return
   var p = newProc(prc, m)
   var header = genProcHeader(m, prc)
   var returnStmt: PRope = nil
@@ -1217,6 +1221,8 @@ proc rawNewModule(module: PSym, filename: string): BModule =
   result.forwardedProcs = @[]
   result.typeNodesName = getTempName()
   result.nimTypesName = getTempName()
+  for i in low(result.asmSections)..high(result.asmSections):
+    result.asmSections[i] = ""
   # no line tracing for the init sections of the system module so that we
   # don't generate a TFrame which can confuse the stack botton initialization:
   if sfSystemModule in module.flags:
@@ -1396,6 +1402,11 @@ proc writeModule(m: BModule, pending: bool) =
     addFileToCompile(cfile)
   
   addFileToLink(cfilenoext)
+
+  # Check to see if there is asm code that we need to write and compile.
+  if m.asmSections[afsProcs] != "":
+    asmgen.writeModule(m)
+    asmgen.compileModule(m)
 
 proc updateCachedModule(m: BModule) =
   let cfile = getCFile(m)
