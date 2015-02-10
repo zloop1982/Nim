@@ -343,10 +343,10 @@ type
     ##
     ## Each exception has to inherit from `Exception`. See the full `exception
     ## hierarchy`_.
-    parent: ref Exception     ## parent exception (can be used as a stack)
-    name: cstring             ## The exception's name is its Nim identifier.
-                              ## This field is filled automatically in the
-                              ## ``raise`` statement.
+    parent*: ref Exception ## parent exception (can be used as a stack)
+    name: cstring ## The exception's name is its Nim identifier.
+                  ## This field is filled automatically in the
+                  ## ``raise`` statement.
     msg* {.exportc: "message".}: string ## the exception's message. Not
                                         ## providing an exception message 
                                         ## is bad style.
@@ -3161,7 +3161,7 @@ when hostOS != "standalone":
       x[j+i] = item[j]
       inc(j)
 
-proc compiles*(x): bool {.magic: "Compiles", noSideEffect.} =
+proc compiles*(x: expr): bool {.magic: "Compiles", noSideEffect.} =
   ## Special compile-time procedure that checks whether `x` can be compiled
   ## without any semantic error.
   ## This can be used to check whether a type supports some operation:

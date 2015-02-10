@@ -103,28 +103,31 @@ proc semSym(c: PContext, n: PNode, s: PSym, flags: TExprFlags): PNode =
       result = newSymNode(s, n.info)
   of skMacro: result = semMacroExpr(c, n, n, s, flags)
   of skTemplate: result = semTemplateExpr(c, n, s, flags)
-  of skVar, skLet, skResult, skParam, skForVar:
+  of skParam:
+    markUsed(n.info, s)
+    styleCheckUse(n.info, s)
+    if s.typ.kind == tyStatic and s.typ.n != nil:
+      # XXX see the hack in sigmatch.nim ...
+      return s.typ.n
+    elif sfGenSym in s.flags:
+      if c.p.wasForwarded:
+        # gensym'ed parameters that nevertheless have been forward declared
+        # need a special fixup:
+        let realParam = c.p.owner.typ.n[s.position+1]
+        internalAssert realParam.kind == nkSym and realParam.sym.kind == skParam
+        return newSymNode(c.p.owner.typ.n[s.position+1].sym, n.info)
+      elif c.p.owner.kind == skMacro:
+        # gensym'ed macro parameters need a similar hack (see bug #1944):
+        var u = searchInScopes(c, s.name)
+        internalAssert u != nil and u.kind == skParam and u.owner == s.owner
+        return newSymNode(u, n.info)
+    result = newSymNode(s, n.info)
+  of skVar, skLet, skResult, skForVar:
     markUsed(n.info, s)
     styleCheckUse(n.info, s)
     # if a proc accesses a global variable, it is not side effect free:
     if sfGlobal in s.flags:
       incl(c.p.owner.flags, sfSideEffect)
-    elif s.kind == skParam:
-      if s.typ.kind == tyStatic and s.typ.n != nil:
-        # XXX see the hack in sigmatch.nim ...
-        return s.typ.n
-      elif sfGenSym in s.flags:
-        if c.p.wasForwarded:
-          # gensym'ed parameters that nevertheless have been forward declared
-          # need a special fixup:
-          let realParam = c.p.owner.typ.n[s.position+1]
-          internalAssert realParam.kind == nkSym and realParam.sym.kind == skParam
-          return newSymNode(c.p.owner.typ.n[s.position+1].sym, n.info)
-        elif c.p.owner.kind == skMacro:
-          # gensym'ed macro parameters need a similar hack (see bug #1944):
-          var u = searchInScopes(c, s.name)
-          internalAssert u != nil and u.kind == skParam and u.owner == s.owner
-          return newSymNode(u, n.info)
     result = newSymNode(s, n.info)
     # We cannot check for access to outer vars for example because it's still
     # not sure the symbol really ends up being used:
@@ -445,25 +448,30 @@ proc changeType(n: PNode, newType: PType, check: bool) =
     let tup = newType.skipTypes({tyGenericInst})
     if tup.kind != tyTuple:
       internalError(n.info, "changeType: no tuple type for constructor")
-    elif newType.n == nil: discard
-    elif sonsLen(n) > 0 and n.sons[0].kind == nkExprColonExpr: 
-      for i in countup(0, sonsLen(n) - 1): 
+    elif sonsLen(n) > 0 and n.sons[0].kind == nkExprColonExpr:
+      # named tuple?
+      for i in countup(0, sonsLen(n) - 1):
         var m = n.sons[i].sons[0]
-        if m.kind != nkSym: 
+        if m.kind != nkSym:
           internalError(m.info, "changeType(): invalid tuple constr")
           return
-        var f = getSymFromList(newType.n, m.sym.name)
-        if f == nil: 
-          internalError(m.info, "changeType(): invalid identifier")
-          return
-        changeType(n.sons[i].sons[1], f.typ, check)
+        if tup.n != nil:
+          var f = getSymFromList(newType.n, m.sym.name)
+          if f == nil: 
+            internalError(m.info, "changeType(): invalid identifier")
+            return
+          changeType(n.sons[i].sons[1], f.typ, check)
+        else:
+          changeType(n.sons[i].sons[1], tup.sons[i], check)
     else:
       for i in countup(0, sonsLen(n) - 1):
-        var m = n.sons[i]
-        var a = newNodeIT(nkExprColonExpr, m.info, newType.sons[i])
-        addSon(a, newSymNode(newType.n.sons[i].sym))
-        addSon(a, m)
-        changeType(m, tup.sons[i], check)
+        changeType(n.sons[i], tup.sons[i], check)
+        when false:
+          var m = n.sons[i]
+          var a = newNodeIT(nkExprColonExpr, m.info, newType.sons[i])
+          addSon(a, newSymNode(newType.n.sons[i].sym))
+          addSon(a, m)
+          changeType(m, tup.sons[i], check)
   of nkCharLit..nkUInt64Lit:
     if check:
       let value = n.intVal
@@ -578,11 +586,12 @@ proc skipObjConv(n: PNode): PNode =
 proc isAssignable(c: PContext, n: PNode): TAssignableResult = 
   result = parampatterns.isAssignable(c.p.owner, n)
 
-proc newHiddenAddrTaken(c: PContext, n: PNode): PNode = 
-  if n.kind == nkHiddenDeref: 
+proc newHiddenAddrTaken(c: PContext, n: PNode): PNode =
+  if n.kind == nkHiddenDeref and not (gCmd == cmdCompileToCpp or
+                                      sfCompileToCpp in c.module.flags):
     checkSonsLen(n, 1)
     result = n.sons[0]
-  else: 
+  else:
     result = newNodeIT(nkHiddenAddr, n.info, makeVarType(c, n.typ))
     addSon(result, n)
     if isAssignable(c, n) notin {arLValue, arLocalLValue}:
@@ -1209,6 +1218,7 @@ proc asgnToResultVar(c: PContext, n, le, ri: PNode) {.inline.} =
     if x.typ.kind == tyVar and x.kind == nkSym and x.sym.kind == skResult:
       n.sons[0] = x # 'result[]' --> 'result'
       n.sons[1] = takeImplicitAddr(c, ri)
+      x.typ.flags.incl tfVarIsPtr
 
 template resultTypeIsInferrable(typ: PType): expr =
   typ.isMetaType and typ.kind != tyTypeDesc

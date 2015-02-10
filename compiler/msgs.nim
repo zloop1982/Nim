@@ -113,7 +113,7 @@ type
     warnSmallLshouldNotBeUsed, warnUnknownMagic, warnRedefinitionOfLabel, 
     warnUnknownSubstitutionX, warnLanguageXNotSupported,
     warnFieldXNotSupported, warnCommentXIgnored, 
-    warnNilStatement, warnAnalysisLoophole,
+    warnNilStatement, warnTypelessParam,
     warnDifferentHeaps, warnWriteToForeignHeap, warnUnsafeCode,
     warnEachIdentIsTuple, warnShadowIdent, 
     warnProveInit, warnProveField, warnProveIndex, warnGcUnsafe, warnGcUnsafe2,
@@ -311,7 +311,7 @@ const
     errXOnlyAtModuleScope: "\'$1\' is only allowed at top level", 
     errXNeedsParamObjectType: "'$1' needs a parameter that has an object type",
     errTemplateInstantiationTooNested: "template/macro instantiation too nested",
-    errInstantiationFrom: "instantiation from here", 
+    errInstantiationFrom: "template/generic instantiation from here", 
     errInvalidIndexValueForTuple: "invalid index value for tuple subscript", 
     errCommandExpectsFilename: "command expects a filename argument",
     errMainModuleMustBeSpecified: "please, specify a main module in the project configuration file",
@@ -376,7 +376,7 @@ const
     warnFieldXNotSupported: "field \'$1\' not supported [FieldXNotSupported]", 
     warnCommentXIgnored: "comment \'$1\' ignored [CommentXIgnored]", 
     warnNilStatement: "'nil' statement is deprecated; use an empty 'discard' statement instead [NilStmt]", 
-    warnAnalysisLoophole: "thread analysis incomplete due to unknown call '$1' [AnalysisLoophole]",
+    warnTypelessParam: "'$1' has no type. Typeless parameters are deprecated; only allowed for 'template' [TypelessParam]",
     warnDifferentHeaps: "possible inconsistency of thread local heaps [DifferentHeaps]",
     warnWriteToForeignHeap: "write to foreign heap [WriteToForeignHeap]",
     warnUnsafeCode: "unsafe code: '$1' [UnsafeCode]",
@@ -418,7 +418,7 @@ const
     "RedefinitionOfLabel", "UnknownSubstitutionX",
     "LanguageXNotSupported", "FieldXNotSupported",
     "CommentXIgnored", "NilStmt",
-    "AnalysisLoophole", "DifferentHeaps", "WriteToForeignHeap",
+    "TypelessParam", "DifferentHeaps", "WriteToForeignHeap",
     "UnsafeCode", "EachIdentIsTuple", "ShadowIdent", 
     "ProveInit", "ProveField", "ProveIndex", "GcUnsafe", "GcUnsafe2", "Uninit",
     "GcMem", "Destructor", "LockLevel", "User"]
@@ -460,7 +460,7 @@ type
 
   TLineInfo*{.final.} = object # This is designed to be as small as possible,
                                # because it is used
-                               # in syntax nodes. We safe space here by using 
+                               # in syntax nodes. We save space here by using 
                                # two int16 and an int32.
                                # On 64 bit and on 32 bit systems this is 
                                # only 8 bytes.
@@ -522,7 +522,7 @@ proc newFileInfo(fullPath, projPath: string): TFileInfo =
   if optEmbedOrigSrc in gGlobalOptions or true:
     result.lines = @[]
 
-proc fileInfoIdx*(filename: string): int32 =
+proc fileInfoIdx*(filename: string; isKnownFile: var bool): int32 =
   var
     canon: string
     pseudoPath = false
@@ -539,10 +539,15 @@ proc fileInfoIdx*(filename: string): int32 =
   if filenameToIndexTbl.hasKey(canon):
     result = filenameToIndexTbl[canon]
   else:
+    isKnownFile = false
     result = fileInfos.len.int32
     fileInfos.add(newFileInfo(canon, if pseudoPath: filename
                                      else: canon.shortenDir))
     filenameToIndexTbl[canon] = result
+
+proc fileInfoIdx*(filename: string): int32 =
+  var dummy: bool
+  result = fileInfoIdx(filename, dummy)
 
 proc newLineInfo*(fileInfoIdx: int32, line, col: int): TLineInfo =
   result.fileIndex = fileInfoIdx
