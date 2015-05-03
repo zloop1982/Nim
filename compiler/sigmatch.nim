@@ -1235,13 +1235,6 @@ proc paramTypesMatchAux(m: var TCandidate, f, argType: PType,
       if m.callee.kind == tyGenericBody and tfGenericTypeParam notin argType.flags:
         result = newNodeIT(nkType, argOrig.info, makeTypeFromExpr(c, arg))
         return
-    else:
-      var evaluated = c.semTryConstExpr(c, arg)
-      if evaluated != nil:
-        arg.typ = newTypeS(tyStatic, c)
-        arg.typ.sons = @[evaluated.typ]
-        arg.typ.n = evaluated
-        argType = arg.typ
 
   var
     a = if c.inTypeClass > 0: argType.skipTypes({tyTypeDesc, tyFieldAccessor})
@@ -1466,6 +1459,10 @@ proc matchesAux(c: PContext, n, nOrig: PNode,
         return
     if formal.typ.kind == tyVar:
       if not n.isLValue:
+        m.state = csNoMatch
+        return
+    elif formal.typ.kind == tyStatic:
+      if not n.isStaticT_Expr:
         m.state = csNoMatch
         return
 

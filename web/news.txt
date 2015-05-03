@@ -3,9 +3,6 @@ News
 ====
 
 ..
-  2015-05-05 Version 0.11.2 released
-  ==================================
-
   Changes affecting backwards compatibility
   -----------------------------------------
 
@@ -16,6 +13,18 @@ News
 
   Bugfixes
   --------
+
+
+
+..
+  2015-05-03 Version 0.11.2 released
+  ==================================
+
+  This is just a bugfix release that fixes the most pressing regressions we
+  introduced with version 0.11.0. The way type computations are performed was
+  changed significantly causing all sort of problems. Sorry for the
+  inconvenience; we grew overconfident our large test suite would prevent these
+  things.
 
 
 2015-04-30 Version 0.11.0 released

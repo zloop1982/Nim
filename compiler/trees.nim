@@ -99,17 +99,14 @@ proc getMagic*(op: PNode): TMagic =
     else: result = mNone
   else: result = mNone
 
-proc treeToSym*(t: PNode): PSym =
-  result = t.sym
-
 proc isConstExpr*(n: PNode): bool =
   result = (n.kind in
-      {nkCharLit..nkInt64Lit, nkStrLit..nkTripleStrLit,
+      {nkCharLit..nkUInt64Lit, nkStrLit..nkTripleStrLit,
        nkFloatLit..nkFloat64Lit, nkNilLit}) or (nfAllConst in n.flags)
 
 proc isDeepConstExpr*(n: PNode): bool =
   case n.kind
-  of nkCharLit..nkInt64Lit, nkStrLit..nkTripleStrLit,
+  of nkCharLit..nkUInt64Lit, nkStrLit..nkTripleStrLit,
       nkFloatLit..nkFloat64Lit, nkNilLit:
     result = true
   of nkExprEqExpr, nkExprColonExpr, nkHiddenStdConv, nkHiddenSubConv:
@@ -120,6 +117,21 @@ proc isDeepConstExpr*(n: PNode): bool =
     # XXX once constant objects are supported by the codegen this needs to be
     # weakened:
     result = n.typ.isNil or n.typ.skipTypes({tyGenericInst, tyDistinct}).kind != tyObject
+  else: discard
+
+proc isStaticT_Expr*(n: PNode): bool =
+  case n.kind
+  of nkCharLit..nkUInt64Lit, nkStrLit..nkTripleStrLit,
+      nkFloatLit..nkFloat64Lit, nkNilLit:
+    result = true
+  of nkExprEqExpr, nkExprColonExpr, nkHiddenStdConv, nkHiddenSubConv:
+    result = isStaticT_Expr(n.sons[1])
+  of nkCurly, nkBracket, nkPar, nkObjConstr, nkClosure:
+    for i in 0 .. <n.len:
+      if not isStaticT_Expr(n.sons[i]): return false
+    result = true
+  of nkSym:
+    result = n.sym.kind in {skConst, skEnumField}
   else: discard
 
 proc flattenTreeAux(d, a: PNode, op: TMagic) =

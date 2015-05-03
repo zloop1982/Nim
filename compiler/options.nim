@@ -97,7 +97,7 @@ var
   gOptions*: TOptions = {optObjCheck, optFieldCheck, optRangeCheck,
                          optBoundsCheck, optOverflowCheck, optAssert, optWarns,
                          optHints, optStackTrace, optLineTrace,
-                         optPatterns, optNilCheck}
+                         optPatterns, optNilCheck, optImplicitStatic}
   gGlobalOptions*: TGlobalOptions = {optThreadAnalysis}
   gExitcode*: int8
   gCmd*: TCommands = cmdNone  # the command
