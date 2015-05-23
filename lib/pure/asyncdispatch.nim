@@ -1216,6 +1216,7 @@ proc generateExceptionCheck(futSym,
   if tryStmt.kind == nnkNilLit:
     result = rootReceiver
   else:
+    # Create an if statement checking the type of the current exception
     var exceptionChecks: seq[tuple[cond, body: NimNode]] = @[]
     let errorNode = newDotExpr(futSym, newIdentNode("error"))
     for i in 1 .. <tryStmt.len:
@@ -1240,6 +1241,8 @@ proc generateExceptionCheck(futSym,
         expectKind(exceptBranch[exceptIdentCount], nnkStmtList)
         exceptionChecks.add((ifCond, exceptBranch[exceptIdentCount]))
     # -> -> else: raise futSym.error
+    # This branch is entered when there are not 'except' branches
+    # specific to the exception.
     exceptionChecks.add((newIdentNode("true"),
         newNimNode(nnkRaiseStmt).add(errorNode)))
     # Read the future if there is no error.
@@ -1257,6 +1260,7 @@ proc generateExceptionCheck(futSym,
       (newDotExpr(futSym, newIdentNode("failed")), ifBody)
     )
     result.add elseNode
+    echo(treeRepr(result))
 
 template createVar(result: var NimNode, futSymName: string,
                    asyncProc: NimNode,
@@ -1336,53 +1340,53 @@ proc processBody(node, retFutureSym: NimNode,
   of nnkTryStmt:
     # try: await x; except: ...
     result = newNimNode(nnkStmtList, node)
-    template wrapInTry(n, tryBody: expr) =
-      var temp = n
+    template wrapInTry(n, tryBody: expr, copyN: bool) =
+      var temp = if copyN: n.copy else: n
       n[0] = tryBody
       tryBody = temp
 
       # Transform ``except`` body.
       # TODO: Could we perform some ``await`` transformation here to get it
       # working in ``except``?
-      tryBody[1] = processBody(n[1], retFutureSym, subTypeIsVoid, nil)
+      #tryBody[1] = processBody(n[1], retFutureSym, subTypeIsVoid, nil)
 
-    proc processForTry(n: NimNode, i: var int,
-                       res: NimNode): bool {.compileTime.} =
+
+    proc processForTry(child: NimNode, origNode: NimNode,
+        ): tuple[res: NimNode, transformed: bool] {.compileTime, nimcall.}
+    proc processNodes(n: NimNode): NimNode {.compileTime, nimcall.} =
+      result = newStmtList()
+      #echo(treeRepr(n))
+      var nodes = n.skipStmtList()
+      for child in nodes.children:
+        var (res, transformed) = processForTry(child, n)
+        if not transformed:
+          # If this line of code hasn't been transformed, we need to wrap
+          # it in a try statement.
+          #wrapInTry(node, res, false)
+          discard
+        result.add res
+
+    proc processForTry(child: NimNode, origNode: NimNode,
+        ): tuple[res: NimNode, transformed: bool]  =
       ## Transforms the body of the tryStmt. Does not transform the
       ## body in ``except``.
       ## Returns true if the tryStmt node was transformed into an ifStmt.
-      result = false
-      var skipped = n.skipStmtList()
-      while i < skipped.len:
-        var processed = processBody(skipped[i], retFutureSym,
-                                    subTypeIsVoid, n)
+      var processed: NimNode # = processBody(child, retFutureSym,
+                             #     subTypeIsVoid, origNode)
+      # Check if we transformed the node into an exception check.
+      # This suggests skipped[i] contains ``await``.
+      if processed.kind != child.kind or processed.len != child.len:
+        processed = processed.skipUntilStmtList()
+        expectKind(processed, nnkStmtList)
+        expectKind(processed[2][1], nnkElse)
 
-        # Check if we transformed the node into an exception check.
-        # This suggests skipped[i] contains ``await``.
-        if processed.kind != skipped[i].kind or processed.len != skipped[i].len:
-          processed = processed.skipUntilStmtList()
-          expectKind(processed, nnkStmtList)
-          expectKind(processed[2][1], nnkElse)
-          i.inc
+        processed[2][1][0] = processNodes(processed[2][1][0])
 
-          if not processForTry(n, i, processed[2][1][0]):
-            # We need to wrap the nnkElse nodes back into a tryStmt.
-            # As they are executed if an exception does not happen
-            # inside the awaited future.
-            # The following code will wrap the nodes inside the
-            # original tryStmt.
-            wrapInTry(n, processed[2][1][0])
+        result = (processed, true)
+      else:
+        result = (child, false)
 
-          res.add processed
-          result = true
-        else:
-          res.add skipped[i]
-          i.inc
-    var i = 0
-    if not processForTry(node, i, result):
-      # If the tryStmt hasn't been transformed we can just put the body
-      # back into it.
-      wrapInTry(node, result)
+    result = processNodes(node)
     return
   else: discard
 
@@ -1492,8 +1496,8 @@ macro async*(prc: stmt): stmt {.immediate.} =
   result[6] = outerProcBody
 
   #echo(treeRepr(result))
-  #if prc[0].getName == "test":
-  #  echo(toStrLit(result))
+  if prc[0].getName == "catch":
+    echo(toStrLit(result))
 
 proc recvLine*(socket: TAsyncFD): Future[string] {.async.} =
   ## Reads a line of data from ``socket``. Returned future will complete once

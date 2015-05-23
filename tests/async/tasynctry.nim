@@ -17,6 +17,9 @@ proc foobar() {.async.} =
   if 5 == 5:
     raise newException(EInvalidIndex, "Test")
 
+proc raiseExc() =
+  raise newException(EInvalidIndex, "Test")
+
 proc catch() {.async.} =
   # TODO: Create a test for when exceptions are not caught.
   try:
@@ -91,6 +94,14 @@ proc test4(): Future[int] {.async.} =
   except:
     result = 2
 
+proc test2650(): Future[int] {.async.} =
+  # Test for bug #2650. https://github.com/Araq/Nim/issues/2650
+  try:
+    raiseExc()
+    discard await foo()
+  except:
+    result = 5
+
 var x = test()
 assert x.read
 
@@ -102,3 +113,6 @@ assert y.read == 2
 
 y = test4()
 assert y.read == 2
+
+y = test2650()
+assert y.read == 5
