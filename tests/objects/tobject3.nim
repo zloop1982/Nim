@@ -4,7 +4,7 @@
 
 type
   TFoo = ref object of RootObj
-    Data: int  
+    Data: int
   TBar = ref object of TFoo
     nil
   TBar2 = ref object of TBar
@@ -49,7 +49,7 @@ proc makeDesktop(): PDesktop = new(TDesktop)
 
 proc makeWindow(): PWindow = new(TWindow)
 
-proc thisCausesError(a: var PView, b: PView) =
+proc thisCausesError(a: PView, b: PView) =
   discard
 
 var dd = makeDesktop()

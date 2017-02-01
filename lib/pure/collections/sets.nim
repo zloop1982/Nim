@@ -18,7 +18,7 @@
 ## that ``=`` performs a copy of the set.
 
 import
-  os, hashes, math
+  hashes, math
 
 {.pragma: myShallow.}
 when not defined(nimhygiene):
@@ -58,7 +58,7 @@ proc isValid*[A](s: HashSet[A]): bool =
   ## initialized. Example:
   ##
   ## .. code-block ::
-  ##   proc savePreferences(options: Set[string]) =
+  ##   proc savePreferences(options: HashSet[string]) =
   ##     assert options.isValid, "Pass an initialized set!"
   ##     # Do stuff here, may crash in release builds!
   result = not s.data.isNil
@@ -72,7 +72,7 @@ proc len*[A](s: HashSet[A]): int =
   ##
   ## .. code-block::
   ##
-  ##   var values: Set[int]
+  ##   var values: HashSet[int]
   ##   assert(not values.isValid)
   ##   assert values.len == 0
   result = s.counter
@@ -154,16 +154,27 @@ proc rawGetKnownHC[A](s: HashSet[A], key: A, hc: Hash): int {.inline.} =
 proc rawGet[A](s: HashSet[A], key: A, hc: var Hash): int {.inline.} =
   rawGetImpl()
 
-proc mget*[A](s: var HashSet[A], key: A): var A =
+proc `[]`*[A](s: var HashSet[A], key: A): var A =
   ## returns the element that is actually stored in 's' which has the same
-  ## value as 'key' or raises the ``EInvalidKey`` exception. This is useful
+  ## value as 'key' or raises the ``KeyError`` exception. This is useful
   ## when one overloaded 'hash' and '==' but still needs reference semantics
   ## for sharing.
   assert s.isValid, "The set needs to be initialized."
   var hc: Hash
   var index = rawGet(s, key, hc)
   if index >= 0: result = s.data[index].key
-  else: raise newException(KeyError, "key not found: " & $key)
+  else:
+    when compiles($key):
+      raise newException(KeyError, "key not found: " & $key)
+    else:
+      raise newException(KeyError, "key not found")
+
+proc mget*[A](s: var HashSet[A], key: A): var A {.deprecated.} =
+  ## returns the element that is actually stored in 's' which has the same
+  ## value as 'key' or raises the ``KeyError`` exception. This is useful
+  ## when one overloaded 'hash' and '==' but still needs reference semantics
+  ## for sharing. Use ```[]``` instead.
+  s[key]
 
 proc contains*[A](s: HashSet[A], key: A): bool =
   ## Returns true iff `key` is in `s`.
@@ -245,10 +256,14 @@ proc incl*[A](s: var HashSet[A], other: HashSet[A]) =
   assert other.isValid, "The set `other` needs to be initialized."
   for item in other: incl(s, item)
 
-template doWhile(a: expr, b: stmt): stmt =
+template doWhile(a, b) =
   while true:
     b
     if not a: break
+
+template default[T](t: typedesc[T]): T =
+  var v: T
+  v
 
 proc excl*[A](s: var HashSet[A], key: A) =
   ## Excludes `key` from the set `s`.
@@ -266,12 +281,14 @@ proc excl*[A](s: var HashSet[A], key: A) =
   var msk = high(s.data)
   if i >= 0:
     s.data[i].hcode = 0
+    s.data[i].key = default(type(s.data[i].key))
     dec(s.counter)
     while true:         # KnuthV3 Algo6.4R adapted for i=i+1 instead of i=i-1
       var j = i         # The correctness of this depends on (h+1) in nextTry,
       var r = j         # though may be adaptable to other simple sequences.
       s.data[i].hcode = 0              # mark current EMPTY
-      doWhile ((i >= r and r > j) or (r > j and j > i) or (j > i and i >= r)):
+      s.data[i].key = default(type(s.data[i].key))
+      doWhile((i >= r and r > j) or (r > j and j > i) or (j > i and i >= r)):
         i = (i + 1) and msk            # increment mod table size
         if isEmpty(s.data[i].hcode):   # end of collision cluster; So all done
           return
@@ -323,7 +340,7 @@ proc init*[A](s: var HashSet[A], initialSize=64) =
   ## existing values and calling `excl() <#excl,TSet[A],A>`_ on them. Example:
   ##
   ## .. code-block ::
-  ##   var a: Set[int]
+  ##   var a: HashSet[int]
   ##   a.init(4)
   ##   a.incl(2)
   ##   a.init
@@ -356,7 +373,7 @@ proc toSet*[A](keys: openArray[A]): HashSet[A] =
   result = initSet[A](rightSize(keys.len))
   for key in items(keys): result.incl(key)
 
-template dollarImpl(): stmt {.dirty.} =
+template dollarImpl() {.dirty.} =
   result = "{"
   for key in items(s):
     if result.len > 1: result.add(", ")
@@ -600,7 +617,7 @@ proc card*[A](s: OrderedSet[A]): int {.inline.} =
   ## <http://en.wikipedia.org/wiki/Cardinality>`_ of a set.
   result = s.counter
 
-template forAllOrderedPairs(yieldStmt: stmt) {.dirty, immediate.} =
+template forAllOrderedPairs(yieldStmt: untyped) {.dirty.} =
   var h = s.first
   while h >= 0:
     var nxt = s.data[h].next
@@ -944,7 +961,7 @@ when isMainModule and not defined(release):
       var b = initOrderedSet[int]()
       for x in [2, 4, 5]: b.incl(x)
       assert($a == $b)
-      assert(a == b) # https://github.com/Araq/Nimrod/issues/1413
+      assert(a == b) # https://github.com/Araq/Nim/issues/1413
 
     block initBlocks:
       var a: OrderedSet[int]

@@ -10,10 +10,12 @@
 # This include file implements the semantic checking for magics.
 # included from sem.nim
 
-proc semAddr(c: PContext; n: PNode): PNode =
+proc semAddr(c: PContext; n: PNode; isUnsafeAddr=false): PNode =
   result = newNodeI(nkAddr, n.info)
   let x = semExprWithType(c, n)
-  if isAssignable(c, x) notin {arLValue, arLocalLValue}:
+  if x.kind == nkSym:
+    x.sym.flags.incl(sfAddrTaken)
+  if isAssignable(c, x, isUnsafeAddr) notin {arLValue, arLocalLValue}:
     localError(n.info, errExprHasNoAddress)
   result.add x
   result.typ = makePtrType(c, x.typ)
@@ -22,7 +24,45 @@ proc semTypeOf(c: PContext; n: PNode): PNode =
   result = newNodeI(nkTypeOfExpr, n.info)
   let typExpr = semExprWithType(c, n, {efInTypeof})
   result.add typExpr
-  result.typ = makeTypeDesc(c, typExpr.typ.skipTypes({tyTypeDesc, tyIter}))
+  result.typ = makeTypeDesc(c, typExpr.typ.skipTypes({tyTypeDesc}))
+
+type
+  SemAsgnMode = enum asgnNormal, noOverloadedSubscript, noOverloadedAsgn
+
+proc semAsgn(c: PContext, n: PNode; mode=asgnNormal): PNode
+proc semSubscript(c: PContext, n: PNode, flags: TExprFlags): PNode
+
+proc skipAddr(n: PNode): PNode {.inline.} =
+  (if n.kind == nkHiddenAddr: n.sons[0] else: n)
+
+proc semArrGet(c: PContext; n: PNode; flags: TExprFlags): PNode =
+  result = newNodeI(nkBracketExpr, n.info)
+  for i in 1..<n.len: result.add(n[i])
+  let oldBracketExpr = c.p.bracketExpr
+  result = semSubscript(c, result, flags)
+  c.p.bracketExpr = oldBracketExpr
+  if result.isNil:
+    let x = copyTree(n)
+    x.sons[0] = newIdentNode(getIdent"[]", n.info)
+    bracketNotFoundError(c, x)
+    #localError(n.info, "could not resolve: " & $n)
+    result = n
+
+proc semArrPut(c: PContext; n: PNode; flags: TExprFlags): PNode =
+  # rewrite `[]=`(a, i, x)  back to ``a[i] = x``.
+  let b = newNodeI(nkBracketExpr, n.info)
+  b.add(n[1].skipAddr)
+  for i in 2..n.len-2: b.add(n[i])
+  result = newNodeI(nkAsgn, n.info, 2)
+  result.sons[0] = b
+  result.sons[1] = n.lastSon
+  result = semAsgn(c, result, noOverloadedSubscript)
+
+proc semAsgnOpr(c: PContext; n: PNode): PNode =
+  result = newNodeI(nkAsgn, n.info, 2)
+  result.sons[0] = n[1]
+  result.sons[1] = n[2]
+  result = semAsgn(c, result, noOverloadedAsgn)
 
 proc semIsPartOf(c: PContext, n: PNode, flags: TExprFlags): PNode =
   var r = isPartOf(n[1], n[2])
@@ -74,8 +114,12 @@ proc semTypeTraits(c: PContext, n: PNode): PNode =
 
 proc semOrd(c: PContext, n: PNode): PNode =
   result = n
-  result.typ = makeRangeType(c, firstOrd(n.sons[1].typ),
-                                lastOrd(n.sons[1].typ), n.info)
+  let parType = n.sons[1].typ
+  if isOrdinalType(parType) or parType.kind == tySet:
+    result.typ = makeRangeType(c, firstOrd(parType), lastOrd(parType), n.info)
+  else:
+    localError(n.info, errOrdinalTypeExpected)
+    result.typ = errorType(c)
 
 proc semBindSym(c: PContext, n: PNode): PNode =
   result = copyNode(n)
@@ -93,13 +137,13 @@ proc semBindSym(c: PContext, n: PNode): PNode =
     return errorNode(c, n)
 
   let id = newIdentNode(getIdent(sl.strVal), n.info)
-  let s = qualifiedLookUp(c, id)
+  let s = qualifiedLookUp(c, id, {checkUndeclared})
   if s != nil:
     # we need to mark all symbols:
     var sc = symChoice(c, id, s, TSymChoiceRule(isMixin.intVal))
     result.add(sc)
   else:
-    localError(n.sons[1].info, errUndeclaredIdentifier, sl.strVal)
+    errorUndeclaredIdentifier(c, n.sons[1].info, sl.strVal)
 
 proc semShallowCopy(c: PContext, n: PNode, flags: TExprFlags): PNode
 
@@ -107,22 +151,18 @@ proc isStrangeArray(t: PType): bool =
   let t = t.skipTypes(abstractInst)
   result = t.kind == tyArray and t.firstOrd != 0
 
-proc isNegative(n: PNode): bool =
-  let n = n.skipConv
-  if n.kind in {nkCharLit..nkUInt64Lit}:
-    result = n.intVal < 0
-  elif n.kind in nkCallKinds and n.sons[0].kind == nkSym:
-    result = n.sons[0].sym.magic in {mUnaryMinusI, mUnaryMinusI64}
-
 proc magicsAfterOverloadResolution(c: PContext, n: PNode,
                                    flags: TExprFlags): PNode =
   case n[0].sym.magic
   of mAddr:
     checkSonsLen(n, 2)
-    result = semAddr(c, n.sons[1])
+    result = semAddr(c, n.sons[1], n[0].sym.name.s == "unsafeAddr")
   of mTypeOf:
     checkSonsLen(n, 2)
     result = semTypeOf(c, n.sons[1])
+  of mArrGet: result = semArrGet(c, n, flags)
+  of mArrPut: result = semArrPut(c, n, flags)
+  of mAsgn: result = semAsgnOpr(c, n)
   of mIsPartOf: result = semIsPartOf(c, n, flags)
   of mTypeTrait: result = semTypeTraits(c, n)
   of mAstToStr:
@@ -138,33 +178,34 @@ proc magicsAfterOverloadResolution(c: PContext, n: PNode,
     result.typ = n[1].typ
   of mDotDot:
     result = n
-    # disallow negative indexing for now:
-    if not c.p.bracketExpr.isNil:
-      if isNegative(n.sons[1]) or (n.len > 2 and isNegative(n.sons[2])):
-        localError(n.info, "use '^' instead of '-'; negative indexing is obsolete")
   of mRoof:
-    # error correction:
-    result = n.sons[1]
-    if c.p.bracketExpr.isNil:
+    let bracketExpr = if n.len == 3: n.sons[2] else: c.p.bracketExpr
+    if bracketExpr.isNil:
       localError(n.info, "no surrounding array access context for '^'")
-    elif c.p.bracketExpr.checkForSideEffects != seNoSideEffect:
+      result = n.sons[1]
+    elif bracketExpr.checkForSideEffects != seNoSideEffect:
       localError(n.info, "invalid context for '^' as '$#' has side effects" %
-        renderTree(c.p.bracketExpr))
-    elif c.p.bracketExpr.typ.isStrangeArray:
+        renderTree(bracketExpr))
+      result = n.sons[1]
+    elif bracketExpr.typ.isStrangeArray:
       localError(n.info, "invalid context for '^' as len!=high+1 for '$#'" %
-        renderTree(c.p.bracketExpr))
+        renderTree(bracketExpr))
+      result = n.sons[1]
     else:
       # ^x  is rewritten to: len(a)-x
       let lenExpr = newNodeI(nkCall, n.info)
       lenExpr.add newIdentNode(getIdent"len", n.info)
-      lenExpr.add c.p.bracketExpr
+      lenExpr.add bracketExpr
       let lenExprB = semExprWithType(c, lenExpr)
       if lenExprB.typ.isNil or not isOrdinalType(lenExprB.typ):
         localError(n.info, "'$#' has to be of an ordinal type for '^'" %
           renderTree(lenExpr))
+        result = n.sons[1]
       else:
         result = newNodeIT(nkCall, n.info, getSysType(tyInt))
-        result.add newSymNode(createMagic("-", mSubI), n.info)
+        let subi = getSysMagic("-", mSubI)
+        #echo "got ", typeToString(subi.typ)
+        result.add newSymNode(subi, n.info)
         result.add lenExprB
         result.add n.sons[1]
   of mPlugin:

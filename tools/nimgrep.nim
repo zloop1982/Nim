@@ -11,7 +11,7 @@ import
   os, strutils, parseopt, pegs, re, terminal
 
 const
-  Version = "0.9"
+  Version = "1.1"
   Usage = "nimgrep - Nim Grep Utility Version " & Version & """
 
   (c) 2012 Andreas Rumpf
@@ -56,6 +56,7 @@ var
 
 proc ask(msg: string): string =
   stdout.write(msg)
+  stdout.flushFile()
   result = stdin.readLine()
 
 proc confirm: TConfirmEnum =
@@ -108,18 +109,21 @@ proc highlight(s, match, repl: string, t: tuple[first, last: int],
   writeColored(match)
   for i in t.last+1 .. y: stdout.write(s[i])
   stdout.write("\n")
+  stdout.flushFile()
   if showRepl:
     stdout.write(spaces(alignment-1), "-> ")
     for i in x .. t.first-1: stdout.write(s[i])
     writeColored(repl)
     for i in t.last+1 .. y: stdout.write(s[i])
     stdout.write("\n")
+    stdout.flushFile()
 
 proc processFile(filename: string) =
   var filenameShown = false
   template beforeHighlight =
     if not filenameShown and optVerbose notin options:
       stdout.writeLine(filename)
+      stdout.flushFile()
       filenameShown = true
 
   var buffer: string
@@ -128,8 +132,10 @@ proc processFile(filename: string) =
   except IOError:
     echo "cannot open file: ", filename
     return
-  if optVerbose in options: stdout.writeLine(filename)
-  var pegp: TPeg
+  if optVerbose in options:
+    stdout.writeLine(filename)
+    stdout.flushFile()
+  var pegp: Peg
   var rep: Regex
   var result: string
 
@@ -155,7 +161,7 @@ proc processFile(filename: string) =
       t = findBounds(buffer, pegp, matches, i)
     else:
       t = findBounds(buffer, rep, matches, i)
-    if t.first <= 0: break
+    if t.first < 0: break
     inc(line, countLines(buffer, i, t.first-1))
 
     var wholeMatch = buffer.substr(t.first, t.last)
@@ -207,7 +213,7 @@ proc hasRightExt(filename: string, exts: seq[string]): bool =
     if os.cmpPaths(x, y) == 0: return true
 
 proc styleInsensitive(s: string): string =
-  template addx: stmt =
+  template addx =
     result.add(s[i])
     inc(i)
   result = ""
@@ -254,10 +260,12 @@ proc walker(dir: string) =
 
 proc writeHelp() =
   stdout.write(Usage)
+  stdout.flushFile()
   quit(0)
 
 proc writeVersion() =
   stdout.write(Version & "\n")
+  stdout.flushFile()
   quit(0)
 
 proc checkOptions(subset: TOptions, a, b: string) =
@@ -291,7 +299,7 @@ for kind, key, val in getopt():
     of "word", "w": incl(options, optWord)
     of "ignorecase", "i": incl(options, optIgnoreCase)
     of "ignorestyle", "y": incl(options, optIgnoreStyle)
-    of "ext": extensions = val.split('|')
+    of "ext": extensions.add val.split('|')
     of "nocolor": useWriteStyled = false
     of "verbose": incl(options, optVerbose)
     of "help", "h": writeHelp()

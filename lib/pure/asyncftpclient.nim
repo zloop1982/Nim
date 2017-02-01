@@ -6,23 +6,74 @@
 #    distribution, for details about the copyright.
 #
 
-## This module implement an asynchronous FTP client.
+## This module implements an asynchronous FTP client. It allows you to connect
+## to an FTP server and perform operations on it such as for example:
 ##
-## Examples
-## --------
+## * The upload of new files.
+## * The removal of existing files.
+## * Download of files.
+## * Changing of files' permissions.
+## * Navigation through the FTP server's directories.
 ##
-## .. code-block::nim
+## Connecting to an FTP server
+## ------------------------
 ##
-##      var ftp = newAsyncFtpClient("example.com", user = "test", pass = "test")
-##      proc main(ftp: AsyncFtpClient) {.async.} =
+## In order to begin any sort of transfer of files you must first
+## connect to an FTP server. You can do so with the ``connect`` procedure.
+##
+##   .. code-block::nim
+##      import asyncdispatch, asyncftpclient
+##      proc main() {.async.} =
+##        var ftp = newAsyncFtpClient("example.com", user = "test", pass = "test")
 ##        await ftp.connect()
-##        echo await ftp.pwd()
-##        echo await ftp.listDirs()
-##        await ftp.store("payload.jpg", "payload.jpg")
-##        await ftp.retrFile("payload.jpg", "payload2.jpg")
-##        echo("Finished")
+##        echo("Connected")
+##      waitFor(main())
 ##
-##      waitFor main(ftp)
+## A new ``main`` async procedure must be declared to allow the use of the
+## ``await`` keyword. The connection will complete asynchronously and the
+## client will be connected after the ``await ftp.connect()`` call.
+##
+## Uploading a new file
+## --------------------
+##
+## After a connection is made you can use the ``store`` procedure to upload
+## a new file to the FTP server. Make sure to check you are in the correct
+## working directory before you do so with the ``pwd`` procedure, you can also
+## instead specify an absolute path.
+##
+##   .. code-block::nim
+##      import asyncdispatch, asyncftpclient
+##      proc main() {.async.} =
+##        var ftp = newAsyncFtpClient("example.com", user = "test", pass = "test")
+##        await ftp.connect()
+##        let currentDir = await ftp.pwd()
+##        assert currentDir == "/home/user/"
+##        await ftp.store("file.txt", "file.txt")
+##        echo("File finished uploading")
+##      waitFor(main())
+##
+## Checking the progress of a file transfer
+## ----------------------------------------
+##
+## The progress of either a file upload or a file download can be checked
+## by specifying a ``onProgressChanged`` procedure to the ``store`` or
+## ``retrFile`` procedures.
+##
+##   .. code-block::nim
+##      import asyncdispatch, asyncftpclient
+##
+##      proc onProgressChanged(total, progress: BiggestInt,
+##                              speed: float): Future[void] =
+##        echo("Uploaded ", progress, " of ", total, " bytes")
+##        echo("Current speed: ", speed, " kb/s")
+##
+##      proc main() {.async.} =
+##        var ftp = newAsyncFtpClient("example.com", user = "test", pass = "test")
+##        await ftp.connect()
+##        await ftp.store("file.txt", "/home/user/file.txt", onProgressChanged)
+##        echo("File finished uploading")
+##      waitFor(main())
+
 
 import asyncdispatch, asyncnet, strutils, parseutils, os, times
 
@@ -230,14 +281,14 @@ proc getFile(ftp: AsyncFtpClient, file: File, total: BiggestInt,
   assertReply(await(ftp.expectReply()), "226")
 
 proc defaultOnProgressChanged*(total, progress: BiggestInt,
-    speed: float): Future[void] {.nimcall,gcsafe.} =
+    speed: float): Future[void] {.nimcall,gcsafe,procvar.} =
   ## Default FTP ``onProgressChanged`` handler. Does nothing.
   result = newFuture[void]()
   #echo(total, " ", progress, " ", speed)
   result.complete()
 
 proc retrFile*(ftp: AsyncFtpClient, file, dest: string,
-               onProgressChanged = defaultOnProgressChanged) {.async.} =
+               onProgressChanged: ProgressChangedProc = defaultOnProgressChanged) {.async.} =
   ## Downloads ``file`` and saves it to ``dest``.
   ## The ``EvRetr`` event is passed to the specified ``handleEvent`` function
   ## when the download is finished. The event's ``filename`` field will be equal
@@ -288,7 +339,7 @@ proc doUpload(ftp: AsyncFtpClient, file: File,
     await countdownFut or sendFut
 
 proc store*(ftp: AsyncFtpClient, file, dest: string,
-            onProgressChanged = defaultOnProgressChanged) {.async.} =
+            onProgressChanged: ProgressChangedProc = defaultOnProgressChanged) {.async.} =
   ## Uploads ``file`` to ``dest`` on the remote FTP server. Usage of this
   ## function asynchronously is recommended to view the progress of
   ## the download.
@@ -302,6 +353,20 @@ proc store*(ftp: AsyncFtpClient, file, dest: string,
   assertReply reply, ["125", "150"]
 
   await doUpload(ftp, destFile, onProgressChanged)
+
+proc rename*(ftp: AsyncFtpClient, nameFrom: string, nameTo: string) {.async.} =
+  ## Rename a file or directory on the remote FTP Server from current name
+  ## ``name_from`` to new name ``name_to``
+  assertReply(await ftp.send("RNFR " & name_from), "350")
+  assertReply(await ftp.send("RNTO " & name_to), "250")
+
+proc removeFile*(ftp: AsyncFtpClient, filename: string) {.async.} =
+  ## Delete a file ``filename`` on the remote FTP server
+  assertReply(await ftp.send("DELE " & filename), "250")
+
+proc removeDir*(ftp: AsyncFtpClient, dir: string) {.async.} =
+  ## Delete a directory ``dir`` on the remote FTP server
+  assertReply(await ftp.send("RMD " & dir), "250")
 
 proc newAsyncFtpClient*(address: string, port = Port(21),
     user, pass = ""): AsyncFtpClient =
@@ -322,6 +387,11 @@ when not defined(testing) and isMainModule:
     echo await ftp.listDirs()
     await ftp.store("payload.jpg", "payload.jpg")
     await ftp.retrFile("payload.jpg", "payload2.jpg")
+    await ftp.rename("payload.jpg", "payload_renamed.jpg")
+    await ftp.store("payload.jpg", "payload_remove.jpg")
+    await ftp.removeFile("payload_remove.jpg")
+    await ftp.createDir("deleteme")
+    await ftp.removeDir("deleteme")
     echo("Finished")
 
   waitFor main(ftp)

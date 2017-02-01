@@ -11,17 +11,19 @@
 ## container for a set or a mapping of strings. Based on the excellent paper
 ## by Adam Langley.
 
+include "system/inclrtl"
+
 type
   NodeObj[T] = object {.acyclic.}
     byte: int ## byte index of the difference
     otherbits: char
     case isLeaf: bool
     of false: child: array[0..1, ref NodeObj[T]]
-    of true: 
+    of true:
       key: string
       when T isnot void:
         val: T
-    
+
   Node[T] = ref NodeObj[T]
   CritBitTree*[T] = object ## The crit bit tree can either be used
                            ## as a mapping from strings to
@@ -66,7 +68,7 @@ proc rawInsert[T](c: var CritBitTree[T], key: string): Node[T] =
       let ch = if it.byte < key.len: key[it.byte] else: '\0'
       let dir = (1 + (ch.ord or it.otherBits.ord)) shr 8
       it = it.child[dir]
-    
+
     var newOtherBits = 0
     var newByte = 0
     block blockX:
@@ -84,7 +86,7 @@ proc rawInsert[T](c: var CritBitTree[T], key: string): Node[T] =
     newOtherBits = newOtherBits xor 255
     let ch = it.key[newByte]
     let dir = (1 + (ord(ch) or newOtherBits)) shr 8
-    
+
     var inner: Node[T]
     new inner
     new result
@@ -93,7 +95,7 @@ proc rawInsert[T](c: var CritBitTree[T], key: string): Node[T] =
     inner.otherBits = chr(newOtherBits)
     inner.byte = newByte
     inner.child[1 - dir] = result
-    
+
     var wherep = addr(c.root)
     while true:
       var p = wherep[]
@@ -123,6 +125,14 @@ proc containsOrIncl*(c: var CritBitTree[void], key: string): bool =
   var n = rawInsert(c, key)
   result = c.count == oldCount
 
+proc inc*(c: var CritBitTree[int]; key: string) =
+  ## counts the 'key'.
+  let oldCount = c.count
+  var n = rawInsert(c, key)
+  if c.count == oldCount:
+    # not a new key:
+    inc n.val
+
 proc incl*(c: var CritBitTree[void], key: string) =
   ## includes `key` in `c`.
   discard rawInsert(c, key)
@@ -132,20 +142,32 @@ proc `[]=`*[T](c: var CritBitTree[T], key: string, val: T) =
   var n = rawInsert(c, key)
   n.val = val
 
-proc `[]`*[T](c: CritBitTree[T], key: string): T {.inline.} =
-  ## retrieves the value at ``c[key]``. If `key` is not in `t`,
-  ## default empty value for the type `B` is returned
-  ## and no exception is raised. One can check with ``hasKey`` whether the key
-  ## exists.
+template get[T](c: CritBitTree[T], key: string): T {.immediate.} =
   let n = rawGet(c, key)
   if n != nil: result = n.val
+  else:
+    when compiles($key):
+      raise newException(KeyError, "key not found: " & $key)
+    else:
+      raise newException(KeyError, "key not found")
 
-proc mget*[T](c: var CritBitTree[T], key: string): var T {.inline.} =
+proc `[]`*[T](c: CritBitTree[T], key: string): T {.inline, deprecatedGet.} =
+  ## retrieves the value at ``c[key]``. If `key` is not in `t`, the
+  ## ``KeyError`` exception is raised. One can check with ``hasKey`` whether
+  ## the key exists.
+  get(c, key)
+
+proc `[]`*[T](c: var CritBitTree[T], key: string): var T {.inline,
+  deprecatedGet.} =
   ## retrieves the value at ``c[key]``. The value can be modified.
   ## If `key` is not in `t`, the ``KeyError`` exception is raised.
-  let n = rawGet(c, key)
-  if n != nil: result = n.val
-  else: raise newException(KeyError, "key not found: " & $key)
+  get(c, key)
+
+proc mget*[T](c: var CritBitTree[T], key: string): var T {.inline, deprecated.} =
+  ## retrieves the value at ``c[key]``. The value can be modified.
+  ## If `key` is not in `t`, the ``KeyError`` exception is raised.
+  ## Use ```[]``` instead.
+  get(c, key)
 
 proc excl*[T](c: var CritBitTree[T], key: string) =
   ## removes `key` (and its associated value) from the set `c`.
@@ -176,7 +198,7 @@ iterator leaves[T](n: Node[T]): Node[T] =
     # XXX actually we could compute the necessary stack size in advance:
     # it's roughly log2(c.count).
     var stack = @[n]
-    while stack.len > 0: 
+    while stack.len > 0:
       var it = stack.pop
       while not it.isLeaf:
         stack.add(it.child[1])
@@ -205,12 +227,12 @@ iterator items*[T](c: CritBitTree[T]): string =
 iterator pairs*[T](c: CritBitTree[T]): tuple[key: string, val: T] =
   ## yields all (key, value)-pairs of `c`.
   for x in leaves(c.root): yield (x.key, x.val)
-  
+
 iterator mpairs*[T](c: var CritBitTree[T]): tuple[key: string, val: var T] =
   ## yields all (key, value)-pairs of `c`. The yielded values can be modified.
   for x in leaves(c.root): yield (x.key, x.val)
 
-proc allprefixedAux[T](c: CritBitTree[T], key: string): Node[T] =
+proc allprefixedAux[T](c: CritBitTree[T], key: string; longestMatch: bool): Node[T] =
   var p = c.root
   var top = p
   if p != nil:
@@ -220,43 +242,51 @@ proc allprefixedAux[T](c: CritBitTree[T], key: string): Node[T] =
       let dir = (1 + (ch.ord or p.otherBits.ord)) shr 8
       p = p.child[dir]
       if q.byte < key.len: top = p
-    for i in 0 .. <key.len:
-      if p.key[i] != key[i]: return
+    if not longestMatch:
+      for i in 0 .. <key.len:
+        if p.key[i] != key[i]: return
     result = top
 
-iterator itemsWithPrefix*[T](c: CritBitTree[T], prefix: string): string =
-  ## yields all keys starting with `prefix`.
-  let top = allprefixedAux(c, prefix)
+iterator itemsWithPrefix*[T](c: CritBitTree[T], prefix: string;
+                             longestMatch=false): string =
+  ## yields all keys starting with `prefix`. If `longestMatch` is true,
+  ## the longest match is returned, it doesn't have to be a complete match then.
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield x.key
 
-iterator keysWithPrefix*[T](c: CritBitTree[T], prefix: string): string =
+iterator keysWithPrefix*[T](c: CritBitTree[T], prefix: string;
+                            longestMatch=false): string =
   ## yields all keys starting with `prefix`.
-  let top = allprefixedAux(c, prefix)
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield x.key
 
-iterator valuesWithPrefix*[T](c: CritBitTree[T], prefix: string): T =
+iterator valuesWithPrefix*[T](c: CritBitTree[T], prefix: string;
+                              longestMatch=false): T =
   ## yields all values of `c` starting with `prefix` of the
   ## corresponding keys.
-  let top = allprefixedAux(c, prefix)
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield x.val
 
-iterator mvaluesWithPrefix*[T](c: var CritBitTree[T], prefix: string): var T =
+iterator mvaluesWithPrefix*[T](c: var CritBitTree[T], prefix: string;
+                               longestMatch=false): var T =
   ## yields all values of `c` starting with `prefix` of the
   ## corresponding keys. The values can be modified.
-  let top = allprefixedAux(c, prefix)
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield x.val
 
 iterator pairsWithPrefix*[T](c: CritBitTree[T],
-                             prefix: string): tuple[key: string, val: T] =
+                             prefix: string;
+                             longestMatch=false): tuple[key: string, val: T] =
   ## yields all (key, value)-pairs of `c` starting with `prefix`.
-  let top = allprefixedAux(c, prefix)
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield (x.key, x.val)
-  
+
 iterator mpairsWithPrefix*[T](c: var CritBitTree[T],
-                              prefix: string): tuple[key: string, val: var T] =
+                              prefix: string;
+                             longestMatch=false): tuple[key: string, val: var T] =
   ## yields all (key, value)-pairs of `c` starting with `prefix`.
   ## The yielded values can be modified.
-  let top = allprefixedAux(c, prefix)
+  let top = allprefixedAux(c, prefix, longestMatch)
   for x in leaves(top): yield (x.key, x.val)
 
 proc `$`*[T](c: CritBitTree[T]): string =

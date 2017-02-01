@@ -10,7 +10,7 @@
 # This module contains data about the different processors
 # and operating systems.
 # Note: Unfortunately if an OS or CPU is listed here this does not mean that
-# Nimrod has been tested on this platform or that the RTL has been ported.
+# Nim has been tested on this platform or that the RTL has been ported.
 # Feel free to test for your excentric platform!
 
 import
@@ -158,8 +158,8 @@ type
   TSystemCPU* = enum # Also add CPU for in initialization section and
                      # alias conditionals to condsyms (end of module).
     cpuNone, cpuI386, cpuM68k, cpuAlpha, cpuPowerpc, cpuPowerpc64,
-    cpuSparc, cpuVm, cpuIa64, cpuAmd64, cpuMips, cpuArm,
-    cpuJS, cpuNimrodVM, cpuAVR
+    cpuPowerpc64el, cpuSparc, cpuVm, cpuIa64, cpuAmd64, cpuMips, cpuMipsel,
+    cpuArm, cpuArm64, cpuJS, cpuNimrodVM, cpuAVR, cpuMSP430, cpuSparc64
 
 type
   TEndian* = enum
@@ -175,15 +175,20 @@ const
     (name: "alpha", intSize: 64, endian: littleEndian, floatSize: 64, bit: 64),
     (name: "powerpc", intSize: 32, endian: bigEndian, floatSize: 64, bit: 32),
     (name: "powerpc64", intSize: 64, endian: bigEndian, floatSize: 64,bit: 64),
+    (name: "powerpc64el", intSize: 64, endian: littleEndian, floatSize: 64,bit: 64),
     (name: "sparc", intSize: 32, endian: bigEndian, floatSize: 64, bit: 32),
     (name: "vm", intSize: 32, endian: littleEndian, floatSize: 64, bit: 32),
     (name: "ia64", intSize: 64, endian: littleEndian, floatSize: 64, bit: 64),
     (name: "amd64", intSize: 64, endian: littleEndian, floatSize: 64, bit: 64),
     (name: "mips", intSize: 32, endian: bigEndian, floatSize: 64, bit: 32),
+    (name: "mipsel", intSize: 32, endian: littleEndian, floatSize: 64, bit: 32),
     (name: "arm", intSize: 32, endian: littleEndian, floatSize: 64, bit: 32),
+    (name: "arm64", intSize: 64, endian: littleEndian, floatSize: 64, bit: 64),
     (name: "js", intSize: 32, endian: bigEndian,floatSize: 64,bit: 32),
     (name: "nimrodvm", intSize: 32, endian: bigEndian, floatSize: 64, bit: 32),
-    (name: "avr", intSize: 16, endian: littleEndian, floatSize: 32, bit: 16)]
+    (name: "avr", intSize: 16, endian: littleEndian, floatSize: 32, bit: 16),
+    (name: "msp430", intSize: 16, endian: littleEndian, floatSize: 32, bit: 16),
+    (name: "sparc64", intSize: 64, endian: bigEndian, floatSize: 64, bit: 64)]
 
 var
   targetCPU*, hostCPU*: TSystemCPU

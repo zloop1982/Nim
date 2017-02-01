@@ -21,7 +21,7 @@ type
                            # only slots that are
                            # needed are allocated and not 10_000,
                            # except for the global data description.
-    f: Frame
+    f: TFrame
     slots: array[0..10_000, VarSlot]
 {.deprecated: [TVarSlot: VarSlot, TExtendedFrame: ExtendedFrame].}
 
@@ -66,7 +66,7 @@ var
   dbgBP: array[0..127, Breakpoint] # breakpoints
   dbgBPlen: int
   dbgBPbloom: int64  # we use a bloom filter to speed up breakpoint checking
-  
+
   dbgFilenames*: array[0..300, cstring] ## registered filenames;
                                         ## 'nil' terminated
   dbgFilenameLen: int
@@ -108,8 +108,8 @@ proc fileMatches(c, bp: cstring): bool =
   # and the character for the suffix does not exist or
   # is one of: \  /  :
   # depending on the OS case does not matter!
-  var blen: int = c_strlen(bp)
-  var clen: int = c_strlen(c)
+  var blen: int = bp.len
+  var clen: int = c.len
   if blen > clen: return false
   # check for \ /  :
   if clen-blen-1 >= 0 and c[clen-blen-1] notin {'\\', '/', ':'}:
@@ -159,7 +159,7 @@ type
 {.deprecated: [THash: Hash, TWatchpoint: Watchpoint].}
 
 var
-  watchpoints: array [0..99, Watchpoint]
+  watchpoints: array[0..99, Watchpoint]
   watchpointsLen: int
 
 proc `!&`(h: Hash, val: int): Hash {.inline.} =
@@ -197,7 +197,7 @@ proc genericHashAux(dest: pointer, n: ptr TNimNode, shallow: bool,
     result = genericHashAux(cast[pointer](d +% n.offset), n.typ, shallow, h)
   of nkList:
     result = h
-    for i in 0..n.len-1: 
+    for i in 0..n.len-1:
       result = result !& genericHashAux(dest, n.sons[i], shallow, result)
   of nkCase:
     result = h !& hash(cast[pointer](d +% n.offset), n.typ.size)
@@ -205,7 +205,7 @@ proc genericHashAux(dest: pointer, n: ptr TNimNode, shallow: bool,
     if m != nil: result = genericHashAux(dest, m, shallow, result)
   of nkNone: sysAssert(false, "genericHashAux")
 
-proc genericHashAux(dest: pointer, mt: PNimType, shallow: bool, 
+proc genericHashAux(dest: pointer, mt: PNimType, shallow: bool,
                     h: Hash): Hash =
   sysAssert(mt != nil, "genericHashAux 2")
   case mt.kind
@@ -257,7 +257,7 @@ proc genericHashAux(dest: pointer, mt: PNimType, shallow: bool,
 
 proc genericHash(dest: pointer, mt: PNimType): int =
   result = genericHashAux(dest, mt, false, 0)
-  
+
 proc dbgRegisterWatchpoint(address: pointer, name: cstring,
                            typ: PNimType) {.compilerproc.} =
   let L = watchPointsLen
@@ -285,7 +285,7 @@ var
     ## Only code compiled with the ``debugger:on`` switch calls this hook.
 
   dbgWatchpointHook*: proc (watchpointName: cstring) {.nimcall.}
-  
+
 proc checkWatchpoints =
   let L = watchPointsLen
   for i in 0.. <L:

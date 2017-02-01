@@ -11,7 +11,8 @@
 # use the heap (and nor exceptions) do not include the GC or memory allocator.
 
 var
-  errorMessageWriter*: (proc(msg: string) {.tags: [WriteIOEffect], benign.})
+  errorMessageWriter*: (proc(msg: string) {.tags: [WriteIOEffect], benign,
+                                            nimcall.})
     ## Function that will be called
     ## instead of stdmsg.write when printing stacktrace.
     ## Unstable API.
@@ -26,7 +27,7 @@ else:
   proc writeToStdErr(msg: cstring) =
     discard MessageBoxA(0, msg, nil, 0)
 
-proc showErrorMessage(data: cstring) =
+proc showErrorMessage(data: cstring) {.gcsafe.} =
   if errorMessageWriter != nil:
     errorMessageWriter($data)
   else:
@@ -44,10 +45,12 @@ var
     # a global variable for the root of all try blocks
   currException {.threadvar.}: ref Exception
 
+proc getFrame*(): PFrame {.compilerRtl, inl.} = framePtr
+
 proc popFrame {.compilerRtl, inl.} =
   framePtr = framePtr.prev
 
-proc setFrame(s: PFrame) {.compilerRtl, inl.} =
+proc setFrame*(s: PFrame) {.compilerRtl, inl.} =
   framePtr = s
 
 proc pushSafePoint(s: PSafePoint) {.compilerRtl, inl.} =
@@ -88,13 +91,13 @@ when defined(nativeStacktrace) and nativeStackTraceSupported:
 
   when not hasThreadSupport:
     var
-      tempAddresses: array [0..127, pointer] # should not be alloc'd on stack
+      tempAddresses: array[0..127, pointer] # should not be alloc'd on stack
       tempDlInfo: TDl_info
 
   proc auxWriteStackTraceWithBacktrace(s: var string) =
     when hasThreadSupport:
       var
-        tempAddresses: array [0..127, pointer] # but better than a threadvar
+        tempAddresses: array[0..127, pointer] # but better than a threadvar
         tempDlInfo: TDl_info
     # This is allowed to be expensive since it only happens during crashes
     # (but this way you don't need manual stack tracing)
@@ -122,12 +125,12 @@ when defined(nativeStacktrace) and nativeStackTraceSupported:
 
 when not hasThreadSupport:
   var
-    tempFrames: array [0..127, PFrame] # should not be alloc'd on stack
+    tempFrames: array[0..127, PFrame] # should not be alloc'd on stack
 
 proc auxWriteStackTrace(f: PFrame, s: var string) =
   when hasThreadSupport:
     var
-      tempFrames: array [0..127, PFrame] # but better than a threadvar
+      tempFrames: array[0..127, PFrame] # but better than a threadvar
   const
     firstCalls = 32
   var
@@ -209,12 +212,18 @@ proc quitOrDebug() {.inline.} =
   else:
     endbStep() # call the debugger
 
+when false:
+  proc rawRaise*(e: ref Exception) =
+    ## undocumented. Do not use.
+    pushCurrentException(e)
+    c_longjmp(excHandler.context, 1)
+
 proc raiseExceptionAux(e: ref Exception) =
   if localRaiseHook != nil:
     if not localRaiseHook(e): return
   if globalRaiseHook != nil:
     if not globalRaiseHook(e): return
-  when defined(cpp):
+  when defined(cpp) and not defined(noCppExceptions):
     if e[] of OutOfMemError:
       showErrorMessage(e.name)
       quitOrDebug()
@@ -248,12 +257,12 @@ proc raiseExceptionAux(e: ref Exception) =
             inc L, slen
         template add(buf, s: expr) =
           xadd(buf, s, s.len)
-        var buf: array [0..2000, char]
+        var buf: array[0..2000, char]
         var L = 0
         add(buf, "Error: unhandled exception: ")
         if not isNil(e.msg): add(buf, e.msg)
         add(buf, " [")
-        xadd(buf, e.name, c_strlen(e.name))
+        xadd(buf, e.name, e.name.len)
         add(buf, "]\n")
         showErrorMessage(buf)
       quitOrDebug()
@@ -314,7 +323,7 @@ when defined(endb):
     dbgAborting: bool # whether the debugger wants to abort
 
 when not defined(noSignalHandler):
-  proc signalHandler(sig: cint) {.exportc: "signalHandler", noconv.} =
+  proc signalHandler(sign: cint) {.exportc: "signalHandler", noconv.} =
     template processSignal(s, action: expr) {.immediate,  dirty.} =
       if s == SIGINT: action("SIGINT: Interrupted by Ctrl-C.\n")
       elif s == SIGSEGV:
@@ -336,17 +345,19 @@ when not defined(noSignalHandler):
           action("unknown signal\n")
 
     # print stack trace and quit
+    when defined(memtracker):
+      logPendingOps()
     when hasSomeStackTrace:
       GC_disable()
       var buf = newStringOfCap(2000)
       rawWriteStackTrace(buf)
-      processSignal(sig, buf.add) # nice hu? currying a la Nim :-)
+      processSignal(sign, buf.add) # nice hu? currying a la Nim :-)
       showErrorMessage(buf)
       GC_enable()
     else:
       var msg: cstring
       template asgn(y: expr) = msg = y
-      processSignal(sig, asgn)
+      processSignal(sign, asgn)
       showErrorMessage(msg)
     when defined(endb): dbgAborting = true
     quit(1) # always quit when SIGABRT
@@ -365,6 +376,5 @@ when not defined(noSignalHandler):
 
 proc setControlCHook(hook: proc () {.noconv.} not nil) =
   # ugly cast, but should work on all architectures:
-  type SignalHandler = proc (sig: cint) {.noconv, benign.}
-  {.deprecated: [TSignalHandler: SignalHandler].}
+  type SignalHandler = proc (sign: cint) {.noconv, benign.}
   c_signal(SIGINT, cast[SignalHandler](hook))

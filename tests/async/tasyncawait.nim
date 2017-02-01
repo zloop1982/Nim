@@ -2,7 +2,7 @@ discard """
   file: "tasyncawait.nim"
   output: "5000"
 """
-import asyncdispatch, rawsockets, net, strutils, os
+import asyncdispatch, nativesockets, net, strutils, os
 
 var msgCount = 0
 
@@ -18,7 +18,7 @@ proc sendMessages(client: TAsyncFD) {.async.} =
 
 proc launchSwarm(port: TPort) {.async.} =
   for i in 0 .. <swarmSize:
-    var sock = newAsyncRawSocket()
+    var sock = newAsyncNativeSocket()
 
     await connect(sock, "localhost", port)
     await sendMessages(sock)
@@ -38,19 +38,19 @@ proc readMessages(client: TAsyncFD) {.async.} =
         doAssert false
 
 proc createServer(port: TPort) {.async.} =
-  var server = newAsyncRawSocket()
+  var server = newAsyncNativeSocket()
   block:
     var name: Sockaddr_in
     when defined(windows):
       name.sin_family = toInt(AF_INET).int16
     else:
       name.sin_family = toInt(AF_INET)
-    name.sin_port = htons(int16(port))
+    name.sin_port = htons(uint16(port))
     name.sin_addr.s_addr = htonl(INADDR_ANY)
     if bindAddr(server.SocketHandle, cast[ptr SockAddr](addr(name)),
                 sizeof(name).Socklen) < 0'i32:
       raiseOSError(osLastError())
-  
+
   discard server.SocketHandle.listen()
   while true:
     asyncCheck readMessages(await accept(server))

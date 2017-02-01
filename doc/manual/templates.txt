@@ -10,63 +10,68 @@ The syntax to *invoke* a template is the same as calling a procedure.
 Example:
 
 .. code-block:: nim
-  template `!=` (a, b: expr): expr =
+  template `!=` (a, b: untyped): untyped =
     # this definition exists in the System module
     not (a == b)
 
   assert(5 != 6) # the compiler rewrites that to: assert(not (5 == 6))
 
-The ``!=``, ``>``, ``>=``, ``in``, ``notin``, ``isnot`` operators are in fact 
+The ``!=``, ``>``, ``>=``, ``in``, ``notin``, ``isnot`` operators are in fact
 templates:
 
 | ``a > b`` is transformed into ``b < a``.
-| ``a in b`` is transformed into ``contains(b, a)``. 
+| ``a in b`` is transformed into ``contains(b, a)``.
 | ``notin`` and ``isnot`` have the obvious meanings.
 
-The "types" of templates can be the symbols ``expr`` (stands for *expression*), 
-``stmt`` (stands for *statement*) or ``typedesc`` (stands for *type 
-description*). These are "meta types", they can only be used in certain 
-contexts. Real types can be used too; this implies that expressions are 
-expected.
+The "types" of templates can be the symbols ``untyped``,
+``typed`` or ``typedesc`` (stands for *type
+description*). These are "meta types", they can only be used in certain
+contexts. Real types can be used too; this implies that ``typed`` expressions
+are expected.
 
 
-Ordinary vs immediate templates
--------------------------------
+Typed vs untyped parameters
+---------------------------
 
-There are two different kinds of templates: immediate templates and
-ordinary templates. Ordinary templates take part in overloading resolution. As
-such their arguments need to be type checked before the template is invoked.
-So ordinary templates cannot receive undeclared identifiers:
-
-.. code-block:: nim
-
-  template declareInt(x: expr) = 
-    var x: int
-
-  declareInt(x) # error: unknown identifier: 'x'
-
-An ``immediate`` template does not participate in overload resolution and so
-its arguments are not checked for semantics before invocation. So they can
-receive undeclared identifiers:
+An ``untyped`` parameter means that symbol lookups and type resolution is not
+performed before the expression is passed to the template. This means that for
+example *undeclared* identifiers can be passed to the template:
 
 .. code-block:: nim
 
-  template declareInt(x: expr) {.immediate.} = 
+  template declareInt(x: untyped) =
     var x: int
 
   declareInt(x) # valid
+  x = 3
+
+
+.. code-block:: nim
+
+  template declareInt(x: typed) =
+    var x: int
+
+  declareInt(x) # invalid, because x has not been declared and so has no type
+
+A template where every parameter is ``untyped`` is called an `immediate`:idx:
+template. For historical reasons templates can be explicitly annotated with
+an ``immediate`` pragma and then these templates do not take part in
+overloading resolution and the parameters' types are *ignored* by the
+compiler. Explicit immediate templates are now deprecated.
+
+**Note**: For historical reasons ``stmt`` is an alias for ``typed`` and
+``expr`` an alias for ``untyped``, but new code should use the newer,
+clearer names.
 
 
 Passing a code block to a template
 ----------------------------------
 
-If there is a ``stmt`` parameter it should be the last in the template
-declaration, because statements are passed to a template via a
+You can pass a block of statements as a last parameter to a template via a
 special ``:`` syntax:
 
 .. code-block:: nim
-
-  template withFile(f, fn, mode: expr, actions: stmt): stmt {.immediate.} =
+  template withFile(f, fn, mode, actions: untyped): untyped =
     var f: File
     if open(f, fn, mode):
       try:
@@ -75,13 +80,71 @@ special ``:`` syntax:
         close(f)
     else:
       quit("cannot open: " & fn)
-      
+
   withFile(txt, "ttempl3.txt", fmWrite):
     txt.writeLine("line 1")
     txt.writeLine("line 2")
-  
+
 In the example the two ``writeLine`` statements are bound to the ``actions``
 parameter.
+
+
+Usually to pass a block of code to a template the parameter that accepts
+the block needs to be of type ``untyped``. Because symbol lookups are then
+delayed until template instantiation time:
+
+.. code-block:: nim
+  template t(body: typed) =
+    block:
+      body
+
+  t:
+    var i = 1
+    echo i
+
+  t:
+    var i = 2  # fails with 'attempt to redeclare i'
+    echo i
+
+The above code fails with the mysterious error message that ``i`` has already
+been declared. The reason for this is that the ``var i = ...`` bodies need to
+be type-checked before they are passed to the ``body`` parameter and type
+checking in Nim implies symbol lookups. For the symbol lookups to succeed
+``i`` needs to be added to the current (i.e. outer) scope. After type checking
+these additions to the symbol table are not rolled back (for better or worse).
+The same code works with ``untyped`` as the passed body is not required to be
+type-checked:
+
+.. code-block:: nim
+  template t(body: untyped) =
+    block:
+      body
+
+  t:
+    var i = 1
+    echo i
+
+  t:
+    var i = 2  # compiles
+    echo i
+
+
+Varargs of untyped
+------------------
+
+In addition to the ``untyped`` meta-type that prevents type checking there is
+also ``varargs[untyped]`` so that not even the number of parameters is fixed:
+
+.. code-block:: nim
+  template hideIdentifiers(x: varargs[untyped]) = discard
+
+  hideIdentifiers(undeclared1, undeclared2)
+
+However, since a template cannot iterate over varargs, this feature is
+generally much more useful for macros.
+
+**Note**: For historical reasons ``varargs[expr]`` is not equivalent
+to ``varargs[untyped]``.
 
 
 Symbol binding in templates
@@ -92,20 +155,20 @@ bound from the definition scope of the template:
 
 .. code-block:: nim
   # Module A
-  var 
+  var
     lastId = 0
-  
-  template genId*: expr =
+
+  template genId*: untyped =
     inc(lastId)
     lastId
 
 .. code-block:: nim
   # Module B
   import A
-  
+
   echo genId() # Works as 'lastId' has been bound in 'genId's defining scope
 
-As in generics symbol binding can be influenced via ``mixin`` or ``bind`` 
+As in generics symbol binding can be influenced via ``mixin`` or ``bind``
 statements.
 
 
@@ -117,11 +180,11 @@ In templates identifiers can be constructed with the backticks notation:
 
 .. code-block:: nim
 
-  template typedef(name: expr, typ: typedesc) {.immediate.} = 
+  template typedef(name: untyped, typ: typedesc) =
     type
       `T name`* {.inject.} = typ
       `P name`* {.inject.} = ref `T name`
-      
+
   typedef(myint, int)
   var x: PMyInt
 
@@ -150,7 +213,7 @@ shadowed by the same argument name even when fully qualified:
 
   tstLev(levA)
   # produces: 'levA levA'
-  
+
 But the global symbol can properly be captured by a ``bind`` statement:
 
 .. code-block:: nim
@@ -177,14 +240,14 @@ Per default templates are `hygienic`:idx:\: Local identifiers declared in a
 template cannot be accessed in the instantiation context:
 
 .. code-block:: nim
-  
-  template newException*(exceptn: typedesc, message: string): expr =
+
+  template newException*(exceptn: typedesc, message: string): untyped =
     var
       e: ref exceptn  # e is implicitly gensym'ed here
     new(e)
     e.msg = message
     e
-    
+
   # so this works:
   let e = "message"
   raise newException(EIO, e)
@@ -196,15 +259,15 @@ symbols are not exposed but inject'ed are.
 
 The default for symbols of entity ``type``, ``var``, ``let`` and ``const``
 is ``gensym`` and for ``proc``, ``iterator``, ``converter``, ``template``,
-``macro`` is ``inject``. However, if the name of the entity is passed as a 
+``macro`` is ``inject``. However, if the name of the entity is passed as a
 template parameter, it is an inject'ed symbol:
 
 .. code-block:: nim
-  template withFile(f, fn, mode: expr, actions: stmt): stmt {.immediate.} =
+  template withFile(f, fn, mode: untyped, actions: untyped): untyped =
     block:
       var f: File  # since 'f' is a template param, it's injected implicitly
       ...
-      
+
   withFile(txt, "ttempl3.txt", fmWrite):
     txt.writeLine("line 1")
     txt.writeLine("line 2")
@@ -215,7 +278,7 @@ no semantics outside of a template definition and cannot be abstracted over:
 
 .. code-block:: nim
   {.pragma myInject: inject.}
-  
+
   template t() =
     var x {.myInject.}: int # does NOT work
 
@@ -234,7 +297,7 @@ rewritten to ``f(x)``. Therefore the dot syntax has some limiations when it
 is used to invoke templates/macros:
 
 .. code-block:: nim
-  template declareVar(name: expr): stmt =
+  template declareVar(name: untyped) =
     const name {.inject.} = 45
 
   # Doesn't compile:
@@ -261,8 +324,7 @@ Macros
 ======
 
 A macro is a special kind of low level template. Macros can be used
-to implement `domain specific languages`:idx:. Like templates, macros come in
-the 2 flavors *immediate* and *ordinary*.
+to implement `domain specific languages`:idx:.
 
 While macros enable advanced compile-time code transformations, they
 cannot change Nim's syntax. However, this is no real restriction because
@@ -287,7 +349,7 @@ variable number of arguments:
   # ``macros`` module:
   import macros
 
-  macro debug(n: varargs[expr]): stmt =
+  macro debug(n: varargs[untyped]): untyped =
     # `n` is a Nim AST that contains the whole macro invocation
     # this macro returns a list of statements:
     result = newNimNode(nnkStmtList, n)
@@ -334,21 +396,21 @@ BindSym
 -------
 
 The above ``debug`` macro relies on the fact that ``write``, ``writeLine`` and
-``stdout`` are declared in the system module and thus visible in the 
+``stdout`` are declared in the system module and thus visible in the
 instantiating context. There is a way to use bound identifiers
-(aka `symbols`:idx:) instead of using unbound identifiers. The ``bindSym`` 
+(aka `symbols`:idx:) instead of using unbound identifiers. The ``bindSym``
 builtin can be used for that:
 
 .. code-block:: nim
   import macros
 
-  macro debug(n: varargs[expr]): stmt =
+  macro debug(n: varargs[typed]): untyped =
     result = newNimNode(nnkStmtList, n)
-    for i in 0..n.len-1:
+    for x in n:
       # we can bind symbols in scope via 'bindSym':
-      add(result, newCall(bindSym"write", bindSym"stdout", toStrLit(n[i])))
+      add(result, newCall(bindSym"write", bindSym"stdout", toStrLit(x)))
       add(result, newCall(bindSym"write", bindSym"stdout", newStrLitNode(": ")))
-      add(result, newCall(bindSym"writeLine", bindSym"stdout", n[i]))
+      add(result, newCall(bindSym"writeLine", bindSym"stdout", x))
 
   var
     a: array [0..10, int]
@@ -390,7 +452,7 @@ regular expressions:
 .. code-block:: nim
   import macros
 
-  macro case_token(n: stmt): stmt =
+  macro case_token(n: untyped): untyped =
     # creates a lexical analyzer from regular expressions
     # ... (implementation is an exercise for the reader :-)
     discard
@@ -418,18 +480,18 @@ powerful programming construct that still suffices. So the "check list" is:
 Macros as pragmas
 -----------------
 
-Whole routines (procs, iterators etc.) can also be passed to a template or 
-a macro via the pragma notation: 
+Whole routines (procs, iterators etc.) can also be passed to a template or
+a macro via the pragma notation:
 
 .. code-block:: nim
-  template m(s: stmt) = discard
+  template m(s: untyped) = discard
 
   proc p() {.m.} = discard
 
 This is a simple syntactic transformation into:
 
 .. code-block:: nim
-  template m(s: stmt) = discard
+  template m(s: untyped) = discard
 
   m:
     proc p() = discard

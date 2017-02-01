@@ -8,7 +8,7 @@ discard """
 import os
 
 var
-  thr: array [0..5, TThread[tuple[a, b: int]]]
+  thr: array [0..5, Thread[tuple[a, b: int]]]
 
 proc doNothing() = discard
 
@@ -34,9 +34,9 @@ proc echoLeTree(n: PNode) =
     echo it.data
     it = it.le
 
-proc threadFunc(interval: tuple[a, b: int]) {.thread.} = 
+proc threadFunc(interval: tuple[a, b: int]) {.thread.} =
   doNothing()
-  for i in interval.a..interval.b: 
+  for i in interval.a..interval.b:
     var r = buildTree(i)
     echoLeTree(r) # for local data
   root = buildTree(2) # BAD!

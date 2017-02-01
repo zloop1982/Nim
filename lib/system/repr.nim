@@ -16,21 +16,34 @@ proc reprInt(x: int64): string {.compilerproc.} = return $x
 proc reprFloat(x: float): string {.compilerproc.} = return $x
 
 proc reprPointer(x: pointer): string {.compilerproc.} =
-  var buf: array [0..59, char]
+  var buf: array[0..59, char]
   discard c_sprintf(buf, "%p", x)
   return $buf
 
 proc `$`(x: uint64): string =
-  var buf: array [0..59, char]
-  discard c_sprintf(buf, "%llu", x)
-  return $buf
+  if x == 0:
+    result = "0"
+  else:
+    var buf: array[60, char]
+    var i = 0
+    var n = x
+    while n != 0:
+      let nn = n div 10'u64
+      buf[i] = char(n - 10'u64 * nn + ord('0'))
+      inc i
+      n = nn
 
-proc reprStrAux(result: var string, s: string) =
+    let half = i div 2
+    # Reverse
+    for t in 0 .. < half: swap(buf[t], buf[i-t-1])
+    result = $buf
+
+proc reprStrAux(result: var string, s: cstring; len: int) =
   if cast[pointer](s) == nil:
     add result, "nil"
     return
   add result, reprPointer(cast[pointer](s)) & "\""
-  for i in 0.. <s.len:
+  for i in 0.. <len:
     let c = s[i]
     case c
     of '"': add result, "\\\""
@@ -44,7 +57,7 @@ proc reprStrAux(result: var string, s: string) =
 
 proc reprStr(s: string): string {.compilerRtl.} =
   result = ""
-  reprStrAux(result, s)
+  reprStrAux(result, s, s.len)
 
 proc reprBool(x: bool): string {.compilerRtl.} =
   if x: result = "true"
@@ -60,25 +73,23 @@ proc reprChar(x: char): string {.compilerRtl.} =
   add result, "\'"
 
 proc reprEnum(e: int, typ: PNimType): string {.compilerRtl.} =
-  # we read an 'int' but this may have been too large, so mask the other bits:
-  let e = if typ.size == 1: e and 0xff
-          elif typ.size == 2: e and 0xffff
-          else: e
-  # XXX we need a proper narrowing based on signedness here
-  #e and ((1 shl (typ.size*8)) - 1)
+  ## Return string representation for enumeration values
+  var n = typ.node
   if ntfEnumHole notin typ.flags:
-    if e <% typ.node.len:
-      return $typ.node.sons[e].name
+    let o = e - n.sons[0].offset
+    if o >= 0 and o <% typ.node.len:
+      return $n.sons[o].name
   else:
     # ugh we need a slow linear search:
-    var n = typ.node
     var s = n.sons
     for i in 0 .. n.len-1:
-      if s[i].offset == e: return $s[i].name
+      if s[i].offset == e:
+        return $s[i].name
+
   result = $e & " (invalid data!)"
 
 type
-  PByteArray = ptr array[0.. 0xffff, int8]
+  PByteArray = ptr array[0xffff, int8]
 
 proc addSetElem(result: var string, elem: int, typ: PNimType) {.benign.} =
   case typ.kind
@@ -222,6 +233,14 @@ when not defined(useNimRtl):
         add result, " --> "
         reprAux(result, p, typ.base, cl)
 
+  proc getInt(p: pointer, size: int): int =
+    case size
+    of 1: return int(cast[ptr uint8](p)[])
+    of 2: return int(cast[ptr uint16](p)[])
+    of 4: return int(cast[ptr uint32](p)[])
+    of 8: return int(cast[ptr uint64](p)[])
+    else: discard
+
   proc reprAux(result: var string, p: pointer, typ: PNimType,
                cl: var ReprClosure) =
     if cl.recdepth == 0:
@@ -246,17 +265,25 @@ when not defined(useNimRtl):
     of tyInt16: add result, $int(cast[ptr int16](p)[])
     of tyInt32: add result, $int(cast[ptr int32](p)[])
     of tyInt64: add result, $(cast[ptr int64](p)[])
-    of tyUInt8: add result, $ze(cast[ptr int8](p)[])
-    of tyUInt16: add result, $ze(cast[ptr int16](p)[])
+    of tyUInt: add result, $(cast[ptr uint](p)[])
+    of tyUInt8: add result, $(cast[ptr uint8](p)[])
+    of tyUInt16: add result, $(cast[ptr uint16](p)[])
+    of tyUInt32: add result, $(cast[ptr uint32](p)[])
+    of tyUInt64: add result, $(cast[ptr uint64](p)[])
 
     of tyFloat: add result, $(cast[ptr float](p)[])
     of tyFloat32: add result, $(cast[ptr float32](p)[])
     of tyFloat64: add result, $(cast[ptr float64](p)[])
-    of tyEnum: add result, reprEnum(cast[ptr int](p)[], typ)
+    of tyEnum: add result, reprEnum(getInt(p, typ.size), typ)
     of tyBool: add result, reprBool(cast[ptr bool](p)[])
     of tyChar: add result, reprChar(cast[ptr char](p)[])
-    of tyString: reprStrAux(result, cast[ptr string](p)[])
-    of tyCString: reprStrAux(result, $(cast[ptr cstring](p)[]))
+    of tyString:
+      let sp = cast[ptr string](p)
+      reprStrAux(result, if sp[].isNil: nil else: sp[].cstring, sp[].len)
+    of tyCString:
+      let cs = cast[ptr cstring](p)[]
+      if cs.isNil: add result, "nil"
+      else: reprStrAux(result, cs, cs.len)
     of tyRange: reprAux(result, p, typ.base, cl)
     of tyProc, tyPointer:
       if cast[PPointer](p)[] == nil: add result, "nil"
@@ -291,4 +318,3 @@ when not defined(useNimRtl):
       reprAux(result, addr(p), typ, cl)
     add result, "\n"
     deinitReprClosure(cl)
-

@@ -35,7 +35,7 @@ type
     errNoneSpeedOrSizeExpectedButXFound, errGuiConsoleOrLibExpectedButXFound,
     errUnknownOS, errUnknownCPU, errGenOutExpectedButXFound,
     errArgsNeedRunOption, errInvalidMultipleAsgn, errColonOrEqualsExpected,
-    errExprExpected, errUndeclaredIdentifier, errUndeclaredField,
+    errExprExpected, errUndeclaredField,
     errUndeclaredRoutine, errUseQualifier,
     errTypeExpected,
     errSystemNeeds, errExecutionOfProgramFailed, errNotOverloadable,
@@ -48,7 +48,7 @@ type
     errIndexOutOfBounds, errIndexTypesDoNotMatch, errBracketsInvalidForType,
     errValueOutOfSetBounds, errFieldInitTwice, errFieldNotInit,
     errExprXCannotBeCalled, errExprHasNoType, errExprXHasNoType,
-    errCastNotInSafeMode, errExprCannotBeCastedToX, errCommaOrParRiExpected,
+    errCastNotInSafeMode, errExprCannotBeCastToX, errCommaOrParRiExpected,
     errCurlyLeOrParLeExpected, errSectionExpected, errRangeExpected,
     errMagicOnlyInSystem, errPowerOfTwoExpected,
     errStringMayNotBeEmpty, errCallConvExpected, errProcOnlyOneCallConv,
@@ -65,7 +65,7 @@ type
     errPureTypeMismatch, errTypeMismatch, errButExpected, errButExpectedX,
     errAmbiguousCallXYZ, errWrongNumberOfArguments,
     errXCannotBePassedToProcVar,
-    errXCannotBeInParamDecl, errPragmaOnlyInHeaderOfProc, errImplOfXNotAllowed,
+    errXCannotBeInParamDecl, errPragmaOnlyInHeaderOfProcX, errImplOfXNotAllowed,
     errImplOfXexpected, errNoSymbolToBorrowFromFound, errDiscardValueX,
     errInvalidDiscard, errIllegalConvFromXtoY, errCannotBindXTwice,
     errInvalidOrderInArrayConstructor,
@@ -82,7 +82,7 @@ type
     errArrayExpectsTwoTypeParams, errInvalidVisibilityX, errInitHereNotAllowed,
     errXCannotBeAssignedTo, errIteratorNotAllowed, errXNeedsReturnType,
     errNoReturnTypeDeclared,
-    errInvalidCommandX, errXOnlyAtModuleScope,
+    errNoCommand, errInvalidCommandX, errXOnlyAtModuleScope,
     errXNeedsParamObjectType,
     errTemplateInstantiationTooNested, errInstantiationFrom,
     errInvalidIndexValueForTuple, errCommandExpectsFilename,
@@ -108,6 +108,8 @@ type
     errCannotInferReturnType,
     errGenericLambdaNotAllowed,
     errCompilerDoesntSupportTarget,
+    errExternalAssemblerNotFound,
+    errExternalAssemblerNotValid,
     errUser,
     warnCannotOpenFile,
     warnOctalEscape, warnXIsNeverRead, warnXmightNotBeenInit,
@@ -116,7 +118,7 @@ type
     warnUnknownSubstitutionX, warnLanguageXNotSupported,
     warnFieldXNotSupported, warnCommentXIgnored,
     warnNilStatement, warnTypelessParam,
-    warnDifferentHeaps, warnWriteToForeignHeap, warnUnsafeCode,
+    warnUseBase, warnWriteToForeignHeap, warnUnsafeCode,
     warnEachIdentIsTuple, warnShadowIdent,
     warnProveInit, warnProveField, warnProveIndex, warnGcUnsafe, warnGcUnsafe2,
     warnUninit, warnGcMem, warnDestructor, warnLockLevel, warnResultShadowed,
@@ -195,13 +197,12 @@ const
     errInvalidMultipleAsgn: "multiple assignment is not allowed",
     errColonOrEqualsExpected: "\':\' or \'=\' expected, but found \'$1\'",
     errExprExpected: "expression expected, but found \'$1\'",
-    errUndeclaredIdentifier: "undeclared identifier: \'$1\'",
     errUndeclaredField: "undeclared field: \'$1\'",
     errUndeclaredRoutine: "attempting to call undeclared routine: \'$1\'",
     errUseQualifier: "ambiguous identifier: \'$1\' -- use a qualifier",
     errTypeExpected: "type expected",
     errSystemNeeds: "system module needs \'$1\'",
-    errExecutionOfProgramFailed: "execution of an external program failed",
+    errExecutionOfProgramFailed: "execution of an external program failed: '$1'",
     errNotOverloadable: "overloaded \'$1\' leads to ambiguous calls",
     errInvalidArgForX: "invalid argument for \'$1\'",
     errStmtHasNoEffect: "statement has no effect",
@@ -213,7 +214,7 @@ const
     errOrdinalTypeExpected: "ordinal type expected",
     errOrdinalOrFloatTypeExpected: "ordinal or float type expected",
     errOverOrUnderflow: "over- or underflow",
-    errCannotEvalXBecauseIncompletelyDefined: "cannot evalutate '$1' because type is not defined completely",
+    errCannotEvalXBecauseIncompletelyDefined: "cannot evaluate '$1' because type is not defined completely",
     errChrExpectsRange0_255: "\'chr\' expects an int in the range 0..255",
     errDynlibRequiresExportc: "\'dynlib\' requires \'exportc\'",
     errUndeclaredFieldX: "undeclared field: \'$1\'",
@@ -228,7 +229,7 @@ const
     errExprHasNoType: "expression has no type",
     errExprXHasNoType: "expression \'$1\' has no type (or is ambiguous)",
     errCastNotInSafeMode: "\'cast\' not allowed in safe mode",
-    errExprCannotBeCastedToX: "expression cannot be casted to $1",
+    errExprCannotBeCastToX: "expression cannot be cast to $1",
     errCommaOrParRiExpected: "',' or ')' expected",
     errCurlyLeOrParLeExpected: "\'{\' or \'(\' expected",
     errSectionExpected: "section (\'type\', \'proc\', etc.) expected",
@@ -272,7 +273,7 @@ const
     errWrongNumberOfArguments: "wrong number of arguments",
     errXCannotBePassedToProcVar: "\'$1\' cannot be passed to a procvar",
     errXCannotBeInParamDecl: "$1 cannot be declared in parameter declaration",
-    errPragmaOnlyInHeaderOfProc: "pragmas are only allowed in the header of a proc",
+    errPragmaOnlyInHeaderOfProcX: "pragmas are only allowed in the header of a proc; redefinition of $1",
     errImplOfXNotAllowed: "implementation of \'$1\' is not allowed",
     errImplOfXexpected: "implementation of \'$1\' expected",
     errNoSymbolToBorrowFromFound: "no symbol to borrow from found",
@@ -316,6 +317,7 @@ const
     errIteratorNotAllowed: "iterators can only be defined at the module\'s top level",
     errXNeedsReturnType: "$1 needs a return type",
     errNoReturnTypeDeclared: "no return type declared",
+    errNoCommand: "no command given",
     errInvalidCommandX: "invalid command: \'$1\'",
     errXOnlyAtModuleScope: "\'$1\' is only allowed at top level",
     errXNeedsParamObjectType: "'$1' needs a parameter that has an object type",
@@ -370,6 +372,8 @@ const
                                 "it is used as an operand to another routine and the types " &
                                 "of the generic paramers can be inferred from the expected signature.",
     errCompilerDoesntSupportTarget: "The current compiler \'$1\' doesn't support the requested compilation target",
+    errExternalAssemblerNotFound: "External assembler not found",
+    errExternalAssemblerNotValid: "External assembler '$1' is not a valid assembler",
     errUser: "$1",
     warnCannotOpenFile: "cannot open \'$1\'",
     warnOctalEscape: "octal escape sequences do not exist; leading zero is ignored",
@@ -386,7 +390,7 @@ const
     warnCommentXIgnored: "comment \'$1\' ignored",
     warnNilStatement: "'nil' statement is deprecated; use an empty 'discard' statement instead",
     warnTypelessParam: "'$1' has no type. Typeless parameters are deprecated; only allowed for 'template'",
-    warnDifferentHeaps: "possible inconsistency of thread local heaps",
+    warnUseBase: "use {.base.} for base methods; baseless methods are deprecated",
     warnWriteToForeignHeap: "write to foreign heap",
     warnUnsafeCode: "unsafe code: '$1'",
     warnEachIdentIsTuple: "each identifier is a tuple",
@@ -434,7 +438,7 @@ const
     "RedefinitionOfLabel", "UnknownSubstitutionX",
     "LanguageXNotSupported", "FieldXNotSupported",
     "CommentXIgnored", "NilStmt",
-    "TypelessParam", "DifferentHeaps", "WriteToForeignHeap",
+    "TypelessParam", "UseBase", "WriteToForeignHeap",
     "UnsafeCode", "EachIdentIsTuple", "ShadowIdent",
     "ProveInit", "ProveField", "ProveIndex", "GcUnsafe", "GcUnsafe2", "Uninit",
     "GcMem", "Destructor", "LockLevel", "ResultShadowed", "User"]
@@ -464,10 +468,12 @@ type
     fullPath: string           # This is a canonical full filesystem path
     projPath*: string          # This is relative to the project's root
     shortName*: string         # short name of the module
-    quotedName*: Rope         # cached quoted short name for codegen
+    quotedName*: Rope          # cached quoted short name for codegen
+                               # purposes
+    quotedFullName*: Rope      # cached quoted full name for codegen
                                # purposes
 
-    lines*: seq[Rope]         # the source code of the module
+    lines*: seq[Rope]          # the source code of the module
                                #   used for better error messages and
                                #   embedding the original source in the
                                #   generated code
@@ -500,7 +506,7 @@ const
                                          warnProveField, warnProveIndex,
                                          warnGcUnsafe,
                                          hintSuccessX, hintPath, hintConf,
-                                         hintProcessing,
+                                         hintProcessing, hintPattern,
                                          hintDependency,
                                          hintExecuting, hintLinking,
                                          hintCodeBegin, hintCodeEnd,
@@ -509,18 +515,20 @@ const
     {low(TNoteKind)..high(TNoteKind)} - {warnShadowIdent, warnUninit,
                                          warnProveField, warnProveIndex,
                                          warnGcUnsafe,
+                                         hintPath,
                                          hintDependency,
-                                         hintExecuting,
                                          hintCodeBegin, hintCodeEnd,
                                          hintSource, hintStackTrace,
                                          hintGCStats},
-    {low(TNoteKind)..high(TNoteKind)} - {hintStackTrace},
+    {low(TNoteKind)..high(TNoteKind)} - {hintStackTrace, warnUninit},
     {low(TNoteKind)..high(TNoteKind)}]
 
 const
   InvalidFileIDX* = int32(-1)
 
 var
+  ForeignPackageNotes*: TNoteKinds = {hintProcessing, warnUnknownMagic,
+    hintQuitCalled, hintExecuting}
   filenameToIndexTbl = initTable[string, int32]()
   fileInfos*: seq[TFileInfo] = @[]
   systemFileIdx*: int32
@@ -555,6 +563,7 @@ proc newFileInfo(fullPath, projPath: string): TFileInfo =
   let fileName = projPath.extractFilename
   result.shortName = fileName.changeFileExt("")
   result.quotedName = fileName.makeCString
+  result.quotedFullName = fullPath.makeCString
   if optEmbedOrigSrc in gGlobalOptions or true:
     result.lines = @[]
 
@@ -610,6 +619,7 @@ var
   gHintCounter*: int = 0
   gWarnCounter*: int = 0
   gErrorMax*: int = 1         # stop after gErrorMax errors
+  gMainPackageNotes*: TNoteKinds = NotesVerbosity[1]
 
 proc unknownLineInfo*(): TLineInfo =
   result.line = int16(-1)
@@ -625,8 +635,11 @@ var
 
 proc suggestWriteln*(s: string) =
   if eStdOut in errorOutputs:
-    if isNil(writelnHook): writeLine(stdout, s)
-    else: writelnHook(s)
+    if isNil(writelnHook):
+      writeLine(stdout, s)
+      flushFile(stdout)
+    else:
+      writelnHook(s)
 
 proc msgQuit*(x: int8) = quit x
 proc msgQuit*(x: string) = quit x
@@ -646,8 +659,6 @@ const
   WarningColor = fgYellow
   HintTitle    = "Hint: "
   HintColor    = fgGreen
-  InfoTitle    = "Info: "
-  InfoColor    = fgCyan
 
 proc getInfoContextLen*(): int = return msgContext.len
 proc setInfoContextLen*(L: int) = setLen(msgContext, L)
@@ -664,9 +675,8 @@ proc getInfoContext*(index: int): TLineInfo =
   if i >=% L: result = unknownLineInfo()
   else: result = msgContext[i]
 
-proc toFilename*(fileIdx: int32): string =
-  if fileIdx < 0: result = "???"
-  else: result = fileInfos[fileIdx].projPath
+template toFilename*(fileIdx: int32): string =
+  (if fileIdx < 0: "???" else: fileInfos[fileIdx].projPath)
 
 proc toFullPath*(fileIdx: int32): string =
   if fileIdx < 0: result = "???"
@@ -718,24 +728,35 @@ proc `??`* (info: TLineInfo, filename: string): bool =
 
 var gTrackPos*: TLineInfo
 
-proc outWriteln*(s: string) =
-  ## Writes to stdout. Always.
-  if eStdOut in errorOutputs: writeLine(stdout, s)
+type
+  MsgFlag* = enum  ## flags altering msgWriteln behavior
+    msgStdout,     ## force writing to stdout, even stderr is default
+    msgSkipHook    ## skip message hook even if it is present
+  MsgFlags* = set[MsgFlag]
 
-proc msgWriteln*(s: string) =
-  ## Writes to stdout. If --stdout option is given, writes to stderr instead.
+proc msgWriteln*(s: string, flags: MsgFlags = {}) =
+  ## Writes given message string to stderr by default.
+  ## If ``--stdout`` option is given, writes to stdout instead. If message hook
+  ## is present, then it is used to output message rather than stderr/stdout.
+  ## This behavior can be altered by given optional flags.
 
   #if gCmd == cmdIdeTools and optCDebug notin gGlobalOptions: return
 
-  if not isNil(writelnHook):
+  if not isNil(writelnHook) and msgSkipHook notin flags:
     writelnHook(s)
-  elif optStdout in gGlobalOptions:
-    if eStdErr in errorOutputs: writeLine(stderr, s)
+  elif optStdout in gGlobalOptions or msgStdout in flags:
+    if eStdOut in errorOutputs:
+      writeLine(stdout, s)
+      flushFile(stdout)
   else:
-    if eStdOut in errorOutputs: writeLine(stdout, s)
+    if eStdErr in errorOutputs:
+      writeLine(stderr, s)
+      # On Windows stderr is fully-buffered when piped, regardless of C std.
+      when defined(windows):
+        flushFile(stderr)
 
 macro callIgnoringStyle(theProc: typed, first: typed,
-                        args: varargs[expr]): stmt =
+                        args: varargs[typed]): untyped =
   let typForegroundColor = bindSym"ForegroundColor".getType
   let typBackgroundColor = bindSym"BackgroundColor".getType
   let typStyle = bindSym"Style".getType
@@ -752,8 +773,9 @@ macro callIgnoringStyle(theProc: typed, first: typed,
        typ != typTerminalCmd:
       result.add(arg)
 
-macro callStyledEcho(args: varargs[expr]): stmt =
-  result = newCall(bindSym"styledEcho")
+macro callStyledWriteLineStderr(args: varargs[typed]): untyped =
+  result = newCall(bindSym"styledWriteLine")
+  result.add(bindSym"stderr")
   for arg in children(args[0][1]):
     result.add(arg)
 
@@ -763,17 +785,22 @@ template callWritelnHook(args: varargs[string, `$`]) =
     s.add arg
   writelnHook s
 
-template styledMsgWriteln*(args: varargs[expr]) =
+template styledMsgWriteln*(args: varargs[typed]) =
   if not isNil(writelnHook):
     callIgnoringStyle(callWritelnHook, nil, args)
   elif optStdout in gGlobalOptions:
-    if eStdErr in errorOutputs: callIgnoringStyle(writeLine, stderr, args)
-  else:
     if eStdOut in errorOutputs:
+      callIgnoringStyle(writeLine, stdout, args)
+      flushFile(stdout)
+  else:
+    if eStdErr in errorOutputs:
       if optUseColors in gGlobalOptions:
-        callStyledEcho(args)
+        callStyledWriteLineStderr(args)
       else:
-        callIgnoringStyle(writeLine, stdout, args)
+        callIgnoringStyle(writeLine, stderr, args)
+      # On Windows stderr is fully-buffered when piped, regardless of C std.
+      when defined(windows):
+        flushFile(stderr)
 
 proc coordToStr(coord: int): string =
   if coord == -1: result = "???"
@@ -789,24 +816,33 @@ proc getMessageStr(msg: TMsgKind, arg: string): string =
 type
   TErrorHandling = enum doNothing, doAbort, doRaise
 
-proc handleError(msg: TMsgKind, eh: TErrorHandling, s: string) =
-  template quit =
-    if defined(debug) or msg == errInternal or hintStackTrace in gNotes:
-      if stackTraceAvailable() and isNil(writelnHook):
-        writeStackTrace()
-      else:
-        styledMsgWriteln(fgRed, "No stack traceback available\nTo create a stacktrace, rerun compilation with ./koch temp " & options.command & " <file>")
-    quit 1
+proc quit(msg: TMsgKind) =
+  if defined(debug) or msg == errInternal or hintStackTrace in gNotes:
+    if stackTraceAvailable() and isNil(writelnHook):
+      writeStackTrace()
+    else:
+      styledMsgWriteln(fgRed, "No stack traceback available\n" &
+          "To create a stacktrace, rerun compilation with ./koch temp " &
+          options.command & " <file>")
+  quit 1
 
+proc log*(s: string) {.procvar.} =
+  var f: File
+  if open(f, "nimsuggest.log", fmAppend):
+    f.writeLine(s)
+    close(f)
+
+proc handleError(msg: TMsgKind, eh: TErrorHandling, s: string) =
   if msg >= fatalMin and msg <= fatalMax:
-    quit()
+    if gCmd == cmdIdeTools: log(s)
+    quit(msg)
   if msg >= errMin and msg <= errMax:
     inc(gErrorCounter)
     options.gExitcode = 1'i8
     if gErrorCounter >= gErrorMax:
-      quit()
+      quit(msg)
     elif eh == doAbort and gCmd != cmdIdeTools:
-      quit()
+      quit(msg)
     elif eh == doRaise:
       raiseRecoverableError(s)
 
@@ -867,8 +903,7 @@ proc rawMessage*(msg: TMsgKind, arg: string) =
 
 proc resetAttributes* =
   if {optUseColors, optStdout} * gGlobalOptions == {optUseColors}:
-    terminal.resetAttributes()
-    stdout.flushFile()
+    terminal.resetAttributes(stderr)
 
 proc writeSurroundingSrc(info: TLineInfo) =
   const indent = "  "
@@ -961,11 +996,11 @@ proc internalError*(errMsg: string) =
   writeContext(unknownLineInfo())
   rawMessage(errInternal, errMsg)
 
-template assertNotNil*(e: expr): expr =
+template assertNotNil*(e): untyped =
   if e == nil: internalError($instantiationInfo())
   e
 
-template internalAssert*(e: bool): stmt =
+template internalAssert*(e: bool) =
   if not e: internalError($instantiationInfo())
 
 proc addSourceLine*(fileIdx: int32, line: string) =
@@ -988,7 +1023,10 @@ proc sourceLine*(i: TLineInfo): Rope =
 
 proc quotedFilename*(i: TLineInfo): Rope =
   internalAssert i.fileIndex >= 0
-  result = fileInfos[i.fileIndex].quotedName
+  if optExcessiveStackTrace in gGlobalOptions:
+    result = fileInfos[i.fileIndex].quotedFullName
+  else:
+    result = fileInfos[i.fileIndex].quotedName
 
 ropes.errorHandler = proc (err: RopesError, msg: string, useWarning: bool) =
   case err
@@ -1014,5 +1052,5 @@ proc listHints*() =
     ])
 
 # enable colors by default on terminals
-if terminal.isatty(stdout):
+if terminal.isatty(stderr):
   incl(gGlobalOptions, optUseColors)

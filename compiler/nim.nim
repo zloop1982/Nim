@@ -1,7 +1,7 @@
 #
 #
 #           The Nim Compiler
-#        (c) Copyright 2013 Andreas Rumpf
+#        (c) Copyright 2015 Andreas Rumpf
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
@@ -13,10 +13,15 @@ when defined(gcc) and defined(windows):
   else:
     {.link: "icons/nim_icon.o".}
 
+when defined(amd64) and defined(windows) and defined(vcc):
+  {.link: "icons/nim-amd64-windows-vcc.res".}
+when defined(i386) and defined(windows) and defined(vcc):
+  {.link: "icons/nim-i386-windows-vcc.res".}
+
 import
   commands, lexer, condsyms, options, msgs, nversion, nimconf, ropes,
   extccomp, strutils, os, osproc, platform, main, parseopt, service,
-  nodejs
+  nodejs, scriptconfig, idents, modulegraphs
 
 when hasTinyCBackend:
   import tccgen
@@ -32,7 +37,7 @@ proc prependCurDir(f: string): string =
   else:
     result = f
 
-proc handleCmdLine() =
+proc handleCmdLine(cache: IdentCache) =
   if paramCount() == 0:
     writeCommandLineUsage()
   else:
@@ -41,24 +46,35 @@ proc handleCmdLine() =
     if gProjectName == "-":
       gProjectName = "stdinfile"
       gProjectFull = "stdinfile"
-      gProjectPath = getCurrentDir()
+      gProjectPath = canonicalizePath getCurrentDir()
       gProjectIsStdin = true
     elif gProjectName != "":
       try:
         gProjectFull = canonicalizePath(gProjectName)
       except OSError:
         gProjectFull = gProjectName
-      var p = splitFile(gProjectFull)
-      gProjectPath = p.dir
+      let p = splitFile(gProjectFull)
+      let dir = if p.dir.len > 0: p.dir else: getCurrentDir()
+      gProjectPath = canonicalizePath dir
       gProjectName = p.name
     else:
-      gProjectPath = getCurrentDir()
+      gProjectPath = canonicalizePath getCurrentDir()
     loadConfigs(DefaultConfig) # load all config files
+    let scriptFile = gProjectFull.changeFileExt("nims")
+    if fileExists(scriptFile):
+      runNimScript(cache, scriptFile, freshDefines=false)
+      # 'nim foo.nims' means to just run the NimScript file and do nothing more:
+      if scriptFile == gProjectFull: return
+    elif fileExists(gProjectPath / "config.nims"):
+      # directory wide NimScript file
+      runNimScript(cache, gProjectPath / "config.nims", freshDefines=false)
     # now process command line arguments again, because some options in the
     # command line can overwite the config file's settings
     extccomp.initVars()
     processCmdLine(passCmd2, "")
-    mainCommand()
+    if options.command == "":
+      rawMessage(errNoCommand, command)
+    mainCommand(newModuleGraph(), cache)
     if optHints in gOptions and hintGCStats in gNotes: echo(GC_getStatistics())
     #echo(GC_getStatistics())
     if msgs.gErrorCounter == 0:
@@ -74,6 +90,14 @@ proc handleCmdLine() =
             ex = quoteShell(
               completeCFilePath(changeFileExt(gProjectFull, "js").prependCurDir))
           execExternalProgram(findNodeJs() & " " & ex & ' ' & commands.arguments)
+        elif gCmd == cmdCompileToPHP:
+          var ex: string
+          if options.outFile.len > 0:
+            ex = options.outFile.prependCurDir.quoteShell
+          else:
+            ex = quoteShell(
+              completeCFilePath(changeFileExt(gProjectFull, "php").prependCurDir))
+          execExternalProgram("php " & ex & ' ' & commands.arguments)
         else:
           var binPath: string
           if options.outFile.len > 0:
@@ -94,5 +118,5 @@ when compileOption("gc", "v2") or compileOption("gc", "refc"):
 condsyms.initDefines()
 
 when not defined(selftest):
-  handleCmdLine()
+  handleCmdLine(newIdentCache())
   msgQuit(int8(msgs.gErrorCounter > 0))

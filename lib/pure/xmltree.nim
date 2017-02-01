@@ -65,7 +65,7 @@ proc newCData*(cdata: string): XmlNode =
 
 proc newEntity*(entity: string): XmlNode =
   ## creates a new ``PXmlNode`` of kind ``xnEntity`` with the text `entity`.
-  result = newXmlNode(xnCData)
+  result = newXmlNode(xnEntity)
   result.fText = entity
 
 proc text*(n: XmlNode): string {.inline.} =
@@ -73,6 +73,12 @@ proc text*(n: XmlNode): string {.inline.} =
   ## comment, or entity node.
   assert n.k in {xnText, xnComment, xnCData, xnEntity}
   result = n.fText
+
+proc `text=`*(n: XmlNode, text: string){.inline.} =
+  ## sets the associated text with the node `n`. `n` can be a CDATA, Text,
+  ## comment, or entity node.
+  assert n.k in {xnText, xnComment, xnCData, xnEntity}
+  n.fText = text
 
 proc rawText*(n: XmlNode): string {.inline.} =
   ## returns the underlying 'text' string by reference.
@@ -85,22 +91,46 @@ proc rawTag*(n: XmlNode): string {.inline.} =
   shallowCopy(result, n.fTag)
 
 proc innerText*(n: XmlNode): string =
-  ## gets the inner text of `n`. `n` has to be an ``xnElement`` node. Only
-  ## ``xnText`` and ``xnEntity`` nodes are considered part of `n`'s inner text,
-  ## other child nodes are silently ignored.
+  ## gets the inner text of `n`:
+  ##
+  ## - If `n` is `xnText` or `xnEntity`, returns its content.
+  ## - If `n` is `xnElement`, runs recursively on each child node and
+  ##   concatenates the results.
+  ## - Otherwise returns an empty string.
+  proc worker(res: var string, n: XmlNode) =
+    case n.k
+    of xnText, xnEntity:
+      res.add(n.fText)
+    of xnElement:
+      for sub in n.s:
+        worker(res, sub)
+    else:
+      discard
+
   result = ""
-  assert n.k == xnElement
-  for i in 0 .. n.s.len-1:
-    if n.s[i].k in {xnText, xnEntity}: result.add(n.s[i].fText)
+  worker(result, n)
 
 proc tag*(n: XmlNode): string {.inline.} =
   ## gets the tag name of `n`. `n` has to be an ``xnElement`` node.
   assert n.k == xnElement
   result = n.fTag
 
+proc `tag=`*(n: XmlNode, tag: string) {.inline.} =
+  ## sets the tag name of `n`. `n` has to be an ``xnElement`` node.
+  assert n.k == xnElement
+  n.fTag = tag
+
 proc add*(father, son: XmlNode) {.inline.} =
   ## adds the child `son` to `father`.
   add(father.s, son)
+
+proc insert*(father, son: XmlNode, index: int) {.inline.} =
+  ## insert the child `son` to a given position in `father`.
+  assert father.k == xnElement and son.k == xnElement
+  if len(father.s) > index:
+    insert(father.s, son, index)
+  else:
+    insert(father.s, son, len(father.s))
 
 proc len*(n: XmlNode): int {.inline.} =
   ## returns the number `n`'s children.
@@ -115,10 +145,20 @@ proc `[]`* (n: XmlNode, i: int): XmlNode {.inline.} =
   assert n.k == xnElement
   result = n.s[i]
 
-proc mget* (n: var XmlNode, i: int): var XmlNode {.inline.} =
+proc delete*(n: XmlNode, i: Natural) {.noSideEffect.} =
+  ## delete the `i`'th child of `n`.
+  assert n.k == xnElement
+  n.s.delete(i)
+
+proc `[]`* (n: var XmlNode, i: int): var XmlNode {.inline.} =
   ## returns the `i`'th child of `n` so that it can be modified
   assert n.k == xnElement
   result = n.s[i]
+
+proc mget*(n: var XmlNode, i: int): var XmlNode {.inline, deprecated.} =
+  ## returns the `i`'th child of `n` so that it can be modified. Use ```[]```
+  ## instead.
+  n[i]
 
 iterator items*(n: XmlNode): XmlNode {.inline.} =
   ## iterates over any child of `n`.
@@ -128,7 +168,7 @@ iterator items*(n: XmlNode): XmlNode {.inline.} =
 iterator mitems*(n: var XmlNode): var XmlNode {.inline.} =
   ## iterates over any child of `n`.
   assert n.k == xnElement
-  for i in 0 .. n.len-1: yield mget(n, i)
+  for i in 0 .. n.len-1: yield n[i]
 
 proc attrs*(n: XmlNode): XmlAttributes {.inline.} =
   ## gets the attributes belonging to `n`.
@@ -197,6 +237,18 @@ proc noWhitespace(n: XmlNode): bool =
 
 proc add*(result: var string, n: XmlNode, indent = 0, indWidth = 2) =
   ## adds the textual representation of `n` to `result`.
+
+  proc addEscapedAttr(result: var string, s: string) =
+    # `addEscaped` alternative with less escaped characters.
+    # Only to be used for escaping attribute values enclosed in double quotes!
+    for c in items(s):
+      case c
+      of '<': result.add("&lt;")
+      of '>': result.add("&gt;")
+      of '&': result.add("&amp;")
+      of '"': result.add("&quot;")
+      else: result.add(c)
+
   if n == nil: return
   case n.k
   of xnElement:
@@ -207,7 +259,7 @@ proc add*(result: var string, n: XmlNode, indent = 0, indWidth = 2) =
         result.add(' ')
         result.add(key)
         result.add("=\"")
-        result.addEscaped(val)
+        result.addEscapedAttr(val)
         result.add('"')
     if n.len > 0:
       result.add('>')
@@ -313,7 +365,7 @@ proc attr*(n: XmlNode, name: string): string =
   ## Returns "" on failure.
   assert n.kind == xnElement
   if n.attrs == nil: return ""
-  return n.attrs[name]
+  return n.attrs.getOrDefault(name)
 
 proc findAll*(n: XmlNode, tag: string, result: var seq[XmlNode]) =
   ## Iterates over all the children of `n` returning those matching `tag`.
@@ -352,6 +404,5 @@ proc findAll*(n: XmlNode, tag: string): seq[XmlNode] =
   findAll(n, tag, result)
 
 when isMainModule:
-  let link = "http://nim-lang.org"
-  assert """<a href="""" & escape(link) & """">Nim rules.</a>""" ==
+  assert """<a href="http://nim-lang.org">Nim rules.</a>""" ==
     $(<>a(href="http://nim-lang.org", newText("Nim rules.")))

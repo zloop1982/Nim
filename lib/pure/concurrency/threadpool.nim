@@ -22,9 +22,9 @@ type
     L: Lock
     counter: int
 
-proc createSemaphore(): Semaphore =
-  initCond(result.c)
-  initLock(result.L)
+proc initSemaphore(cv: var Semaphore) =
+  initCond(cv.c)
+  initLock(cv.L)
 
 proc destroySemaphore(cv: var Semaphore) {.inline.} =
   deinitCond(cv.c)
@@ -77,7 +77,7 @@ proc openBarrier(b: ptr Barrier) {.compilerProc, inline.} =
 proc closeBarrier(b: ptr Barrier) {.compilerProc.} =
   fence()
   if b.left != b.entered:
-    b.cv = createSemaphore()
+    b.cv.initSemaphore()
     fence()
     b.interest = true
     fence()
@@ -195,7 +195,7 @@ proc nimCreateFlowVar[T](): FlowVar[T] {.compilerProc.} =
   new(result, fvFinalizer)
 
 proc nimFlowVarCreateSemaphore(fv: FlowVarBase) {.compilerProc.} =
-  fv.cv = createSemaphore()
+  fv.cv.initSemaphore()
   fv.usesSemaphore = true
 
 proc nimFlowVarSignal(fv: FlowVarBase) {.compilerProc.} =
@@ -251,7 +251,7 @@ proc awaitAny*(flowVars: openArray[FlowVarBase]): int =
   ## **Note**: This results in non-deterministic behaviour and so should be
   ## avoided.
   var ai: AwaitInfo
-  ai.cv = createSemaphore()
+  ai.cv.initSemaphore()
   var conflicts = 0
   for i in 0 .. flowVars.high:
     if cas(addr flowVars[i].ai, nil, addr ai):
@@ -266,6 +266,17 @@ proc awaitAny*(flowVars: openArray[FlowVarBase]): int =
   else:
     result = -1
   destroySemaphore(ai.cv)
+
+proc isReady*(fv: FlowVarBase): bool =
+  ## Determines whether the specified ``FlowVarBase``'s value is available.
+  ##
+  ## If ``true`` awaiting ``fv`` will not block.
+  if fv.usesSemaphore and not fv.awaited:
+    acquire(fv.cv.L)
+    result = fv.cv.counter > 0
+    release(fv.cv.L)
+  else:
+    result = true
 
 proc nimArgsPassingDone(p: pointer) {.compilerProc.} =
   let w = cast[ptr Worker](p)
@@ -283,10 +294,23 @@ var
   currentPoolSize: int
   maxPoolSize = MaxThreadPoolSize
   minPoolSize = 4
-  gSomeReady = createSemaphore()
+  gSomeReady : Semaphore
   readyWorker: ptr Worker
 
+# A workaround for recursion deadlock issue
+# https://github.com/nim-lang/Nim/issues/4597
+var
+  numSlavesLock: Lock
+  numSlavesRunning {.guard: numSlavesLock}: int
+  numSlavesWaiting {.guard: numSlavesLock}: int
+  isSlave {.threadvar.}: bool
+
+numSlavesLock.initLock
+
+gSomeReady.initSemaphore()
+
 proc slave(w: ptr Worker) {.thread.} =
+  isSlave = true
   while true:
     when declared(atomicStoreN):
       atomicStoreN(addr(w.ready), true, ATOMIC_SEQ_CST)
@@ -295,9 +319,18 @@ proc slave(w: ptr Worker) {.thread.} =
     readyWorker = w
     signal(gSomeReady)
     await(w.taskArrived)
-    # XXX Somebody needs to look into this (why does this assertion fail in Visual Studio?)
+    # XXX Somebody needs to look into this (why does this assertion fail
+    # in Visual Studio?)
     when not defined(vcc): assert(not w.ready)
+
+    withLock numSlavesLock:
+      inc numSlavesRunning
+
     w.f(w, w.data)
+
+    withLock numSlavesLock:
+      dec numSlavesRunning
+
     if w.q.len != 0: w.cleanFlowVars
     if w.shutdown:
       w.shutdown = false
@@ -316,11 +349,14 @@ proc distinguishedSlave(w: ptr Worker) {.thread.} =
     if w.q.len != 0: w.cleanFlowVars
 
 var
-  workers: array[MaxThreadPoolSize, TThread[ptr Worker]]
+  workers: array[MaxThreadPoolSize, Thread[ptr Worker]]
   workersData: array[MaxThreadPoolSize, Worker]
 
-  distinguished: array[MaxDistinguishedThread, TThread[ptr Worker]]
+  distinguished: array[MaxDistinguishedThread, Thread[ptr Worker]]
   distinguishedData: array[MaxDistinguishedThread, Worker]
+
+when defined(nimPinToCpu):
+  var gCpus: Natural
 
 proc setMinPoolSize*(size: range[1..MaxThreadPoolSize]) =
   ## sets the minimal thread pool size. The default value of this is 4.
@@ -335,25 +371,35 @@ proc setMaxPoolSize*(size: range[1..MaxThreadPoolSize]) =
       let w = addr(workersData[i])
       w.shutdown = true
 
+when defined(nimRecursiveSpawn):
+  var localThreadId {.threadvar.}: int
+
 proc activateWorkerThread(i: int) {.noinline.} =
-  workersData[i].taskArrived = createSemaphore()
-  workersData[i].taskStarted = createSemaphore()
+  workersData[i].taskArrived.initSemaphore()
+  workersData[i].taskStarted.initSemaphore()
   workersData[i].initialized = true
-  workersData[i].q.empty = createSemaphore()
+  workersData[i].q.empty.initSemaphore()
   initLock(workersData[i].q.lock)
   createThread(workers[i], slave, addr(workersData[i]))
+  when defined(nimRecursiveSpawn):
+    localThreadId = i+1
+  when defined(nimPinToCpu):
+    if gCpus > 0: pinToCpu(workers[i], i mod gCpus)
 
 proc activateDistinguishedThread(i: int) {.noinline.} =
-  distinguishedData[i].taskArrived = createSemaphore()
-  distinguishedData[i].taskStarted = createSemaphore()
+  distinguishedData[i].taskArrived.initSemaphore()
+  distinguishedData[i].taskStarted.initSemaphore()
   distinguishedData[i].initialized = true
-  distinguishedData[i].q.empty = createSemaphore()
+  distinguishedData[i].q.empty.initSemaphore()
   initLock(distinguishedData[i].q.lock)
-  distinguishedData[i].readyForTask = createSemaphore()
+  distinguishedData[i].readyForTask.initSemaphore()
   createThread(distinguished[i], distinguishedSlave, addr(distinguishedData[i]))
 
 proc setup() =
-  currentPoolSize = min(countProcessors(), MaxThreadPoolSize)
+  let p = countProcessors()
+  when defined(nimPinToCpu):
+    gCpus = p
+  currentPoolSize = min(p, MaxThreadPoolSize)
   readyWorker = addr(workersData[0])
   for i in 0.. <currentPoolSize: activateWorkerThread(i)
 
@@ -428,10 +474,46 @@ proc nimSpawn3(fn: WorkerProc; data: pointer) {.compilerProc.} =
         release(stateLock)
       # else the acquire failed, but this means some
       # other thread succeeded, so we don't need to do anything here.
+    when defined(nimRecursiveSpawn):
+      if localThreadId > 0:
+        # we are a worker thread, so instead of waiting for something which
+        # might as well never happen (see tparallel_quicksort), we run the task
+        # on the current thread instead.
+        var self = addr(workersData[localThreadId-1])
+        fn(self, data)
+        await(self.taskStarted)
+        return
+
+    if isSlave:
+      # Run under lock until `numSlavesWaiting` increment to avoid a
+      # race (otherwise two last threads might start waiting together)
+      withLock numSlavesLock:
+        if numSlavesRunning <= numSlavesWaiting + 1:
+          # All the other slaves are waiting
+          # If we wait now, we-re deadlocked until
+          # an external spawn happens !
+          if currentPoolSize < maxPoolSize:
+            if not workersData[currentPoolSize].initialized:
+              activateWorkerThread(currentPoolSize)
+            let w = addr(workersData[currentPoolSize])
+            atomicInc currentPoolSize
+            if selectWorker(w, fn, data):
+              return
+          else:
+            # There is no place in the pool. We're deadlocked.
+            # echo "Deadlock!"
+            discard
+
+        inc numSlavesWaiting
+
     await(gSomeReady)
 
+    if isSlave:
+      withLock numSlavesLock:
+        dec numSlavesWaiting
+
 var
-  distinguishedLock: TLock
+  distinguishedLock: Lock
 
 initLock distinguishedLock
 

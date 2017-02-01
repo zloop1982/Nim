@@ -55,7 +55,7 @@ when defined(Windows):
       event*: KEY_EVENT_RECORD
       safetyBuffer: array[0..5, DWORD]
 
-  proc readConsoleInputW*(hConsoleInput: THANDLE, lpBuffer: var INPUTRECORD,
+  proc readConsoleInputW*(hConsoleInput: HANDLE, lpBuffer: var INPUTRECORD,
                           nLength: uint32,
                           lpNumberOfEventsRead: var uint32): WINBOOL{.
       stdcall, dynlib: "kernel32", importc: "ReadConsoleInputW".}
@@ -94,18 +94,19 @@ when defined(Windows):
         while i < password.len:
           x = runeLenAt(password, i)
           inc i, x
-        password.setLen(password.len - x)
+        password.setLen(max(password.len - x, 0))
       else:
         password.add(toUTF8(c.Rune))
     stdout.write "\n"
 
 else:
-  import linenoise, termios, unsigned
+  import linenoise, termios
 
   proc readLineFromStdin*(prompt: string): TaintedString {.
                           tags: [ReadIOEffect, WriteIOEffect].} =
     var buffer = linenoise.readLine(prompt)
-    if isNil(buffer): quit(0)
+    if isNil(buffer):
+      raise newException(IOError, "Linenoise returned nil")
     result = TaintedString($buffer)
     if result.string.len > 0:
       historyAdd(buffer)
@@ -114,12 +115,12 @@ else:
   proc readLineFromStdin*(prompt: string, line: var TaintedString): bool {.
                           tags: [ReadIOEffect, WriteIOEffect].} =
     var buffer = linenoise.readLine(prompt)
-    if isNil(buffer): quit(0)
+    if isNil(buffer):
+      raise newException(IOError, "Linenoise returned nil")
     line = TaintedString($buffer)
     if line.string.len > 0:
       historyAdd(buffer)
     linenoise.free(buffer)
-    # XXX how to determine CTRL+D?
     result = true
 
   proc readPasswordFromStdin*(prompt: string, password: var TaintedString):

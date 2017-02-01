@@ -9,14 +9,14 @@
 
 # not really an AVL tree anymore, but still balanced ...
 
-template isBottom(n: PAvlNode): bool = n == bottom
+template isBottom(n: PAvlNode): bool = n.link[0] == n
 
 proc lowGauge(n: PAvlNode): int =
   var it = n
   while not isBottom(it):
     result = it.key
     it = it.link[0]
-  
+
 proc highGauge(n: PAvlNode): int =
   result = -1
   var it = n
@@ -24,7 +24,7 @@ proc highGauge(n: PAvlNode): int =
     result = it.upperBound
     it = it.link[1]
 
-proc find(root: PAvlNode, key: int): PAvlNode = 
+proc find(root: PAvlNode, key: int): PAvlNode =
   var it = root
   while not isBottom(it):
     if it.key == key: return it
@@ -52,12 +52,18 @@ proc split(t: var PAvlNode) =
     inc t.level
 
 proc add(a: var MemRegion, t: var PAvlNode, key, upperBound: int) {.benign.} =
-  if t == bottom:
+  if t.isBottom:
     t = allocAvlNode(a, key, upperBound)
   else:
     if key <% t.key:
+      when defined(avlcorruption):
+        if t.link[0] == nil:
+          cprintf("bug here %p\n", t)
       add(a, t.link[0], key, upperBound)
     elif key >% t.key:
+      when defined(avlcorruption):
+        if t.link[1] == nil:
+          cprintf("bug here B %p\n", t)
       add(a, t.link[1], key, upperBound)
     else:
       sysAssert false, "key already exists"
@@ -65,17 +71,17 @@ proc add(a: var MemRegion, t: var PAvlNode, key, upperBound: int) {.benign.} =
     split(t)
 
 proc del(a: var MemRegion, t: var PAvlNode, x: int) {.benign.} =
-  if t == bottom: return
+  if isBottom(t): return
   a.last = t
   if x <% t.key:
     del(a, t.link[0], x)
   else:
     a.deleted = t
     del(a, t.link[1], x)
-  if t == a.last and a.deleted != bottom and x == a.deleted.key:
+  if t == a.last and not isBottom(a.deleted) and x == a.deleted.key:
     a.deleted.key = t.key
     a.deleted.upperBound = t.upperBound
-    a.deleted = bottom
+    a.deleted = getBottom(a)
     t = t.link[1]
     deallocAvlNode(a, a.last)
   elif t.link[0].level < t.level-1 or

@@ -23,6 +23,31 @@ __clang__
 #ifndef NIMBASE_H
 #define NIMBASE_H
 
+/* ------------ ignore typical warnings in Nim-generated files ------------- */
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic ignored "-Wpragmas"
+#  pragma GCC diagnostic ignored "-Wwritable-strings"
+#  pragma GCC diagnostic ignored "-Winvalid-noreturn"
+#  pragma GCC diagnostic ignored "-Wformat"
+#  pragma GCC diagnostic ignored "-Wlogical-not-parentheses"
+#  pragma GCC diagnostic ignored "-Wlogical-op-parentheses"
+#  pragma GCC diagnostic ignored "-Wshadow"
+#  pragma GCC diagnostic ignored "-Wunused-function"
+#  pragma GCC diagnostic ignored "-Wunused-variable"
+#  pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#  pragma GCC diagnostic ignored "-Wtautological-compare"
+#  pragma GCC diagnostic ignored "-Wswitch-bool"
+#  pragma GCC diagnostic ignored "-Wmacro-redefined"
+#  pragma GCC diagnostic ignored "-Wincompatible-pointer-types-discards-qualifiers"
+#endif
+
+#if defined(_MSC_VER)
+#  pragma warning(disable: 4005 4100 4101 4189 4191 4200 4244 4293 4296 4309)
+#  pragma warning(disable: 4310 4365 4456 4477 4514 4574 4611 4668 4702 4706)
+#  pragma warning(disable: 4710 4711 4774 4800 4820 4996 4090)
+#endif
+/* ------------------------------------------------------------------------- */
+
 #if defined(__GNUC__)
 #  define _GNU_SOURCE 1
 #endif
@@ -66,10 +91,27 @@ __clang__
 #  define NIM_CONST  const
 #endif
 
-#if (defined(WIN32) || defined(_WIN32) || defined(__WIN32__))
+/*
+  NIM_THREADVAR declaration based on
+  http://stackoverflow.com/questions/18298280/how-to-declare-a-variable-as-thread-local-portably
+*/
+#if __STDC_VERSION__ >= 201112 && !defined __STDC_NO_THREADS__
+#  define NIM_THREADVAR _Thread_local
+#elif defined _WIN32 && ( \
+       defined _MSC_VER || \
+       defined __ICL || \
+       defined __DMC__ || \
+       defined __BORLANDC__ )
 #  define NIM_THREADVAR __declspec(thread)
-#else
+/* note that ICC (linux) and Clang are covered by __GNUC__ */
+#elif defined __GNUC__ || \
+       defined __SUNPRO_C || \
+       defined __xlC__
 #  define NIM_THREADVAR __thread
+#elif defined __TINYC__
+#  define NIM_THREADVAR
+#else
+#  error "Cannot define NIM_THREADVAR"
 #endif
 
 /* --------------- how int64 constants should be declared: ----------- */
@@ -110,18 +152,31 @@ __clang__
 #  endif
 #  define N_LIB_IMPORT  extern __declspec(dllimport)
 #else
-#  define N_CDECL(rettype, name) rettype name
-#  define N_STDCALL(rettype, name) rettype name
-#  define N_SYSCALL(rettype, name) rettype name
-#  define N_FASTCALL(rettype, name) rettype name
-#  define N_SAFECALL(rettype, name) rettype name
-/* function pointers with calling convention: */
-#  define N_CDECL_PTR(rettype, name) rettype (*name)
-#  define N_STDCALL_PTR(rettype, name) rettype (*name)
-#  define N_SYSCALL_PTR(rettype, name) rettype (*name)
-#  define N_FASTCALL_PTR(rettype, name) rettype (*name)
-#  define N_SAFECALL_PTR(rettype, name) rettype (*name)
-
+#  if defined(__GNUC__)
+#    define N_CDECL(rettype, name) rettype name
+#    define N_STDCALL(rettype, name) rettype name
+#    define N_SYSCALL(rettype, name) rettype name
+#    define N_FASTCALL(rettype, name) __attribute__((fastcall)) rettype name
+#    define N_SAFECALL(rettype, name) rettype name
+/*   function pointers with calling convention: */
+#    define N_CDECL_PTR(rettype, name) rettype (*name)
+#    define N_STDCALL_PTR(rettype, name) rettype (*name)
+#    define N_SYSCALL_PTR(rettype, name) rettype (*name)
+#    define N_FASTCALL_PTR(rettype, name) __attribute__((fastcall)) rettype (*name)
+#    define N_SAFECALL_PTR(rettype, name) rettype (*name)
+#  else
+#    define N_CDECL(rettype, name) rettype name
+#    define N_STDCALL(rettype, name) rettype name
+#    define N_SYSCALL(rettype, name) rettype name
+#    define N_FASTCALL(rettype, name) rettype name
+#    define N_SAFECALL(rettype, name) rettype name
+/*   function pointers with calling convention: */
+#    define N_CDECL_PTR(rettype, name) rettype (*name)
+#    define N_STDCALL_PTR(rettype, name) rettype (*name)
+#    define N_SYSCALL_PTR(rettype, name) rettype (*name)
+#    define N_FASTCALL_PTR(rettype, name) rettype (*name)
+#    define N_SAFECALL_PTR(rettype, name) rettype (*name)
+#  endif
 #  ifdef __cplusplus
 #    define N_LIB_EXPORT  extern "C"
 #  else
@@ -147,9 +202,15 @@ __clang__
 #if defined(__BORLANDC__) || defined(__WATCOMC__) || \
     defined(__POCC__) || defined(_MSC_VER) || defined(WIN32) || defined(_WIN32)
 /* these compilers have a fastcall so use it: */
-#  define N_NIMCALL(rettype, name) rettype __fastcall name
-#  define N_NIMCALL_PTR(rettype, name) rettype (__fastcall *name)
-#  define N_RAW_NIMCALL __fastcall
+#  ifdef __TINYC__
+#    define N_NIMCALL(rettype, name) rettype __attribute((__fastcall)) name
+#    define N_NIMCALL_PTR(rettype, name) rettype (__attribute((__fastcall)) *name)
+#    define N_RAW_NIMCALL __attribute((__fastcall))
+#  else
+#    define N_NIMCALL(rettype, name) rettype __fastcall name
+#    define N_NIMCALL_PTR(rettype, name) rettype (__fastcall *name)
+#    define N_RAW_NIMCALL __fastcall
+#  endif
 #else
 #  define N_NIMCALL(rettype, name) rettype name /* no modifier */
 #  define N_NIMCALL_PTR(rettype, name) rettype (*name)
@@ -160,6 +221,8 @@ __clang__
 #define N_CLOSURE_PTR(rettype, name) N_NIMCALL_PTR(rettype, name)
 
 /* ----------------------------------------------------------------------- */
+
+#define COMMA ,
 
 #include <limits.h>
 #include <stddef.h>
@@ -284,9 +347,6 @@ static N_INLINE(NI32, float32ToInt32)(float x) {
 
 #define float64ToInt64(x) ((NI64) (x))
 
-#define zeroMem(a, size) memset(a, 0, size)
-#define equalMem(a, b, size) (memcmp(a, b, size) == 0)
-
 #define STRING_LITERAL(name, str, length) \
   static const struct {                   \
     TGenericSeq Sup;                      \
@@ -347,23 +407,13 @@ struct TFrame {
   FR.procname = proc; FR.filename = file; FR.line = 0; FR.len = 0; nimFrame(&FR);
 
 #define nimfrs(proc, file, slots, length) \
-  struct {TFrame* prev;NCSTRING procname;NI line;NCSTRING filename; NI len; TVarSlot s[slots];} FR; \
+  struct {TFrame* prev;NCSTRING procname;NI line;NCSTRING filename; NI len; VarSlot s[slots];} FR; \
   FR.procname = proc; FR.filename = file; FR.line = 0; FR.len = length; nimFrame((TFrame*)&FR);
 
 #define nimln(n, file) \
   FR.line = n; FR.filename = file;
 
 #define NIM_POSIX_INIT  __attribute__((constructor))
-
-#if defined(_MSCVER) && defined(__i386__)
-__declspec(naked) int __fastcall NimXadd(volatile int* pNum, int val) {
-  __asm {
-    lock xadd dword ptr [ECX], EDX
-    mov EAX, EDX
-    ret
-  }
-}
-#endif
 
 #ifdef __GNUC__
 #  define likely(x) __builtin_expect(x, 1)
@@ -389,8 +439,8 @@ static inline void GCGuard (void *ptr) { asm volatile ("" :: "X" (ptr)); }
 
 /* Test to see if Nim and the C compiler agree on the size of a pointer.
    On disagreement, your C compiler will say something like:
-   "error: 'assert_numbits' declared as an array with a negative size" */
-typedef int assert_numbits[sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8 ? 1 : -1];
+   "error: 'Nim_and_C_compiler_disagree_on_target_architecture' declared as an array with a negative size" */
+typedef int Nim_and_C_compiler_disagree_on_target_architecture[sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8 ? 1 : -1];
 #endif
 
 #ifdef  __cplusplus
@@ -398,10 +448,6 @@ typedef int assert_numbits[sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(
 #else
 #  define NIM_EXTERNC
 #endif
-
-/* we have to tinker with TNimType as it's both part of system.nim and
-   typeinfo.nim but system.nim doesn't export it cleanly... */
-typedef struct TNimType TNimType;
 
 /* ---------------- platform specific includes ----------------------- */
 
@@ -413,3 +459,7 @@ typedef struct TNimType TNimType;
 #elif defined(__FreeBSD__)
 #  include <sys/types.h>
 #endif
+
+/* Compile with -d:checkAbi and a sufficiently C11:ish compiler to enable */
+#define NIM_CHECK_SIZE(typ, sz) \
+  _Static_assert(sizeof(typ) == sz, "Nim & C disagree on type size")

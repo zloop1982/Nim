@@ -13,6 +13,7 @@ import
 const
   hasTinyCBackend* = defined(tinyc)
   useEffectSystem* = true
+  useWriteTracking* = false
   hasFFI* = defined(useFFI)
   newScopeForIf* = true
   useCaas* = not defined(noCaas)
@@ -33,13 +34,14 @@ type                          # please make sure we have under 32 options
     optProfiler,              # profiler turned on
     optImplicitStatic,        # optimization: implicit at compile time
                               # evaluation
-    optPatterns               # en/disable pattern matching
+    optPatterns,              # en/disable pattern matching
+    optMemTracker
 
   TOptions* = set[TOption]
   TGlobalOption* = enum       # **keep binary compatible**
     gloptNone, optForceFullMake, optDeadCodeElim,
     optListCmd, optCompileOnly, optNoLinking,
-    optSafeCode,              # only allow safe code
+    optReportConceptFailures, # report 'compiles' or 'concept' matching failures
     optCDebug,                # turn on debugging information
     optGenDynLib,             # generate a dynamic library
     optGenStaticLib,          # generate a static library
@@ -65,11 +67,22 @@ type                          # please make sure we have under 32 options
                               # also: generate header file
     optIdeDebug               # idetools: debug mode
     optIdeTerse               # idetools: use terse descriptions
+    optNoCppExceptions        # use C exception handling even with CPP
+    optExcessiveStackTrace    # fully qualified module filenames
+
   TGlobalOptions* = set[TGlobalOption]
+
+const
+  harmlessOptions* = {optForceFullMake, optNoLinking, optReportConceptFailures,
+    optRun, optUseColors, optStdout}
+
+type
   TCommands* = enum           # Nim's commands
                               # **keep binary compatible**
     cmdNone, cmdCompileToC, cmdCompileToCpp, cmdCompileToOC,
-    cmdCompileToJS, cmdCompileToLLVM, cmdInterpret, cmdPretty, cmdDoc,
+    cmdCompileToJS,
+    cmdCompileToPHP,
+    cmdCompileToLLVM, cmdInterpret, cmdPretty, cmdDoc,
     cmdGenDepend, cmdDump,
     cmdCheck,                 # semantic checking for whole project
     cmdParse,                 # parse a single file (for debugging)
@@ -82,10 +95,12 @@ type                          # please make sure we have under 32 options
     cmdRun                    # run the project via TCC backend
   TStringSeq* = seq[string]
   TGCMode* = enum             # the selected GC
-    gcNone, gcBoehm, gcGo, gcMarkAndSweep, gcRefc, gcV2, gcGenerational
+    gcNone, gcBoehm, gcGo, gcStack, gcMarkAndSweep, gcRefc,
+    gcV2, gcGenerational
 
   IdeCmd* = enum
-    ideNone, ideSug, ideCon, ideDef, ideUse
+    ideNone, ideSug, ideCon, ideDef, ideUse, ideDus, ideChk, ideMod,
+    ideHighlight, ideOutline
 
 var
   gIdeCmd*: IdeCmd
@@ -121,10 +136,10 @@ var
 proc importantComments*(): bool {.inline.} = gCmd in {cmdDoc, cmdIdeTools}
 proc usesNativeGC*(): bool {.inline.} = gSelectedGC >= gcRefc
 
-template compilationCachePresent*: expr =
+template compilationCachePresent*: untyped =
   {optCaasEnabled, optSymbolFiles} * gGlobalOptions != {}
 
-template optPreserveOrigSource*: expr =
+template optPreserveOrigSource*: untyped =
   optEmbedOrigSrc in gGlobalOptions
 
 const
@@ -143,10 +158,11 @@ const
 var
   gConfigVars* = newStringTable(modeStyleInsensitive)
   gDllOverrides = newStringTable(modeCaseInsensitive)
+  gModuleOverrides* = newStringTable(modeStyleInsensitive)
   gPrefixDir* = "" # Overrides the default prefix dir in getPrefixDir proc.
   libpath* = ""
-  gProjectName* = "" # holds a name like 'nimrod'
-  gProjectPath* = "" # holds a path like /home/alice/projects/nimrod/compiler/
+  gProjectName* = "" # holds a name like 'nim'
+  gProjectPath* = "" # holds a path like /home/alice/projects/nim/compiler/
   gProjectFull* = "" # projectPath/projectName
   gProjectIsStdin* = false # whether we're compiling from stdin
   gProjectMainIdx*: int32 # the canonical path id of the main module
@@ -172,7 +188,7 @@ proc existsConfigVar*(key: string): bool =
   result = hasKey(gConfigVars, key)
 
 proc getConfigVar*(key: string): string =
-  result = gConfigVars[key]
+  result = gConfigVars.getOrDefault key
 
 proc setConfigVar*(key, val: string) =
   gConfigVars[key] = val
@@ -184,22 +200,50 @@ proc getOutFile*(filename, ext: string): string =
 proc getPrefixDir*(): string =
   ## Gets the prefix dir, usually the parent directory where the binary resides.
   ##
-  ## This is overrided by some tools (namely nimsuggest) via the ``gPrefixDir``
+  ## This is overridden by some tools (namely nimsuggest) via the ``gPrefixDir``
   ## global.
   if gPrefixDir != "": result = gPrefixDir
   else:
     result = splitPath(getAppDir()).head
 
+proc setDefaultLibpath*() =
+  # set default value (can be overwritten):
+  if libpath == "":
+    # choose default libpath:
+    var prefix = getPrefixDir()
+    when defined(posix):
+      if prefix == "/usr": libpath = "/usr/lib/nim"
+      elif prefix == "/usr/local": libpath = "/usr/local/lib/nim"
+      else: libpath = joinPath(prefix, "lib")
+    else: libpath = joinPath(prefix, "lib")
+
+    # Special rule to support other tools (nimble) which import the compiler
+    # modules and make use of them.
+    let realNimPath = findExe("nim")
+    # Find out if $nim/../../lib/system.nim exists.
+    let parentNimLibPath = realNimPath.parentDir().parentDir() / "lib"
+    if not fileExists(libpath / "system.nim") and
+        fileExists(parentNimlibPath / "system.nim"):
+      libpath = parentNimLibPath
+
 proc canonicalizePath*(path: string): string =
-  when not FileSystemCaseSensitive: result = path.expandFilename.toLower
-  else: result = path.expandFilename
+  # on Windows, 'expandFilename' calls getFullPathName which doesn't do
+  # case corrections, so we have to use this convoluted way of retrieving
+  # the true filename (see tests/modules and Nimble uses 'import Uri' instead
+  # of 'import uri'):
+  when defined(windows):
+    result = path.expandFilename
+    for x in walkFiles(result):
+      return x
+  else:
+    result = path.expandFilename
 
 proc shortenDir*(dir: string): string =
   ## returns the interesting part of a dir
-  var prefix = getPrefixDir() & DirSep
+  var prefix = gProjectPath & DirSep
   if startsWith(dir, prefix):
     return substr(dir, len(prefix))
-  prefix = gProjectPath & DirSep
+  prefix = getPrefixDir() & DirSep
   if startsWith(dir, prefix):
     return substr(dir, len(prefix))
   result = dir
@@ -210,63 +254,38 @@ proc removeTrailingDirSep*(path: string): string =
   else:
     result = path
 
-proc getGeneratedPath: string =
+proc disableNimblePath*() =
+  gNoNimblePath = true
+  lazyPaths.head = nil
+  lazyPaths.tail = nil
+  lazyPaths.counter = 0
+
+include packagehandling
+
+proc getNimcacheDir*: string =
   result = if nimcacheDir.len > 0: nimcacheDir else: gProjectPath.shortenDir /
                                                          genSubDir
 
-template newPackageCache(): expr =
-  newStringTable(when FileSystemCaseSensitive:
-                   modeCaseInsensitive
-                 else:
-                   modeCaseSensitive)
 
-var packageCache = newPackageCache()
-
-proc resetPackageCache*() = packageCache = newPackageCache()
-
-iterator myParentDirs(p: string): string =
-  # XXX os's parentDirs is stupid (multiple yields) and triggers an old bug...
-  var current = p
-  while true:
-    current = current.parentDir
-    if current.len == 0: break
-    yield current
-
-proc getPackageName*(path: string): string =
-  var parents = 0
-  block packageSearch:
-    for d in myParentDirs(path):
-      if packageCache.hasKey(d):
-        #echo "from cache ", d, " |", packageCache[d], "|", path.splitFile.name
-        return packageCache[d]
-      inc parents
-      for file in walkFiles(d / "*.nimble"):
-        result = file.splitFile.name
-        break packageSearch
-      for file in walkFiles(d / "*.babel"):
-        result = file.splitFile.name
-        break packageSearch
-  # we also store if we didn't find anything:
-  if result.isNil: result = ""
-  for d in myParentDirs(path):
-    #echo "set cache ", d, " |", result, "|", parents
-    packageCache[d] = result
-    dec parents
-    if parents <= 0: break
-
-proc withPackageName*(path: string): string =
-  let x = path.getPackageName
-  if x.len == 0:
-    result = path
-  else:
-    let (p, file, ext) = path.splitFile
-    result = (p / (x & '_' & file)) & ext
+proc pathSubs*(p, config: string): string =
+  let home = removeTrailingDirSep(os.getHomeDir())
+  result = unixToNativePath(p % [
+    "nim", getPrefixDir(),
+    "lib", libpath,
+    "home", home,
+    "config", config,
+    "projectname", options.gProjectName,
+    "projectpath", options.gProjectPath,
+    "projectdir", options.gProjectPath,
+    "nimcache", getNimcacheDir()])
+  if '~' in result:
+    result = result.replace("~", home)
 
 proc toGeneratedFile*(path, ext: string): string =
   ## converts "/home/a/mymodule.nim", "rod" to "/home/a/nimcache/mymodule.rod"
   var (head, tail) = splitPath(path)
   #if len(head) > 0: head = shortenDir(head & dirSep)
-  result = joinPath([getGeneratedPath(), changeFileExt(tail, ext)])
+  result = joinPath([getNimcacheDir(), changeFileExt(tail, ext)])
   #echo "toGeneratedFile(", path, ", ", ext, ") = ", result
 
 when noTimeMachine:
@@ -294,7 +313,7 @@ when noTimeMachine:
 proc completeGeneratedFilePath*(f: string, createSubDir: bool = true): string =
   var (head, tail) = splitPath(f)
   #if len(head) > 0: head = removeTrailingDirSep(shortenDir(head & dirSep))
-  var subdir = getGeneratedPath() # / head
+  var subdir = getNimcacheDir() # / head
   if createSubDir:
     try:
       createDir(subdir)
@@ -329,17 +348,25 @@ proc rawFindFile2(f: string): string =
     it = PStrEntry(it.next)
   result = ""
 
+template patchModule() {.dirty.} =
+  if result.len > 0 and gModuleOverrides.len > 0:
+    let key = getPackageName(result) & "_" & splitFile(result).name
+    if gModuleOverrides.hasKey(key):
+      let ov = gModuleOverrides[key]
+      if ov.len > 0: result = ov
+
 proc findFile*(f: string): string {.procvar.} =
   if f.isAbsolute:
     result = if f.existsFile: f else: ""
   else:
     result = f.rawFindFile
     if result.len == 0:
-      result = f.toLower.rawFindFile
+      result = f.toLowerAscii.rawFindFile
       if result.len == 0:
         result = f.rawFindFile2
         if result.len == 0:
-          result = f.toLower.rawFindFile2
+          result = f.toLowerAscii.rawFindFile2
+  patchModule()
 
 proc findModule*(modulename, currentModule: string): string =
   # returns path to module
@@ -358,17 +385,7 @@ proc findModule*(modulename, currentModule: string): string =
   result = currentPath / m
   if not existsFile(result):
     result = findFile(m)
-
-proc libCandidates*(s: string, dest: var seq[string]) =
-  var le = strutils.find(s, '(')
-  var ri = strutils.find(s, ')', le+1)
-  if le >= 0 and ri > le:
-    var prefix = substr(s, 0, le - 1)
-    var suffix = substr(s, ri + 1)
-    for middle in split(substr(s, le + 1, ri - 1), '|'):
-      libCandidates(prefix & middle & suffix, dest)
-  else:
-    add(dest, s)
+  patchModule()
 
 proc canonDynlibName(s: string): string =
   let start = if s.startsWith("lib"): 3 else: 0
@@ -398,10 +415,10 @@ proc binaryStrSearch*(x: openArray[string], y: string): int =
       return mid
   result = - 1
 
-template nimdbg*: expr = c.module.fileIdx == gProjectMainIdx
-template cnimdbg*: expr = p.module.module.fileIdx == gProjectMainIdx
-template pnimdbg*: expr = p.lex.fileIdx == gProjectMainIdx
-template lnimdbg*: expr = L.fileIdx == gProjectMainIdx
+template nimdbg*: untyped = c.module.fileIdx == gProjectMainIdx
+template cnimdbg*: untyped = p.module.module.fileIdx == gProjectMainIdx
+template pnimdbg*: untyped = p.lex.fileIdx == gProjectMainIdx
+template lnimdbg*: untyped = L.fileIdx == gProjectMainIdx
 
 proc parseIdeCmd*(s: string): IdeCmd =
   case s:
@@ -409,6 +426,11 @@ proc parseIdeCmd*(s: string): IdeCmd =
   of "con": ideCon
   of "def": ideDef
   of "use": ideUse
+  of "dus": ideDus
+  of "chk": ideChk
+  of "mod": ideMod
+  of "highlight": ideHighlight
+  of "outline": ideOutline
   else: ideNone
 
 proc `$`*(c: IdeCmd): string =
@@ -417,4 +439,9 @@ proc `$`*(c: IdeCmd): string =
   of ideCon: "con"
   of ideDef: "def"
   of ideUse: "use"
+  of ideDus: "dus"
+  of ideChk: "chk"
+  of ideMod: "mod"
   of ideNone: "none"
+  of ideHighlight: "highlight"
+  of ideOutline: "outline"

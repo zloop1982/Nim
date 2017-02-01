@@ -1,9 +1,11 @@
 discard """
   file: "tasyncexceptions.nim"
   exitcode: 1
-  outputsub: "Error: unhandled exception: foobar [Exception]"
+  outputsub: "Error: unhandled exception: foobar"
 """
 import asyncdispatch
+
+# Note: This is a test case for a bug.
 
 proc accept(): Future[int] {.async.} =
   await sleepAsync(100)

@@ -116,7 +116,7 @@ type class           matches
 ``array``            any array type
 ``set``              any set type
 ``seq``              any seq type
-``auto``             any type
+``any``              any type
 ==================   ===================================================
 
 Furthermore, every generic type automatically creates a type class of the same
@@ -162,15 +162,6 @@ module to illustrate this:
 
 Alternatively, the ``distinct`` type modifier can be applied to the type class
 to allow each param matching the type class to bind to a different type.
-
-If a proc param doesn't have a type specified, Nim will use the
-``distinct auto`` type class (also known as ``any``). Note this behavior is 
-deprecated for procs; templates, however, support them:
-
-.. code-block:: nim
-  # allow any combination of param types
-  proc concat(a, b): string = $a & $b # deprecated
-  proc concat(a, b: any): string = $a & $b # preferred
 
 Procs written with the implicitly generic style will often need to refer to the
 type parameters of the matched generic type. They can be easily accessed using
@@ -222,7 +213,7 @@ Concepts are written in the following form:
 
     Container[T] = concept c
       c.len is Ordinal
-      items(c) is iterator
+      items(c) is T
       for value in c:
         type(value) is T
 
@@ -241,19 +232,13 @@ type signatures of the required operations, but since type inference and
 default parameters are still applied in the provided block, it's also possible
 to encode usage protocols that do not reveal implementation details.
 
-As a special rule providing further convenience when writing concepts, any
-type value appearing in a callable expression will be treated as a variable of
-the designated type for overload resolution purposes, unless the type value was
-passed in its explicit ``typedesc[T]`` form:
-
-.. code-block:: nim
-  type
-    OutputStream = concept s
-      write(var s, string)
-
 Much like generics, concepts are instantiated exactly
 once for each tested type and any static code included within them is also
 executed once.
+
+**Hint**: Since concepts are still very rough at the edges there is a
+command line switch ``--reportConceptFailures:on`` to make debugging
+concept related type failures more easy.
 
 
 Symbol lookup in generics
@@ -308,7 +293,7 @@ definition):
   var
     lastId = 0
 
-  template genId*: expr =
+  template genId*: untyped =
     bind lastId
     inc(lastId)
     lastId

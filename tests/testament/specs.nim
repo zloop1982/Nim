@@ -44,6 +44,8 @@ type
     file*, cmd*: string
     outp*: string
     line*, column*: int
+    tfile*: string
+    tline*, tcolumn*: int
     exitCode*: int
     msg*: string
     ccodeCheck*: string
@@ -101,6 +103,18 @@ proc specDefaults*(result: var TSpec) =
   result.cmd = cmdTemplate
   result.line = 0
   result.column = 0
+  result.tfile = ""
+  result.tline = 0
+  result.tcolumn = 0
+
+proc parseTargets*(value: string): set[TTarget] =
+  for v in value.normalize.split:
+    case v
+    of "c": result.incl(targetC)
+    of "cpp", "c++": result.incl(targetCpp)
+    of "objc": result.incl(targetObjC)
+    of "js": result.incl(targetJS)
+    else: echo "target ignored: " & v
 
 proc parseSpec*(filename: string): TSpec =
   specDefaults(result)
@@ -116,6 +130,9 @@ proc parseSpec*(filename: string): TSpec =
     of "file": result.file = e.value
     of "line": discard parseInt(e.value, result.line)
     of "column": discard parseInt(e.value, result.column)
+    of "tfile": result.tfile = e.value
+    of "tline": discard parseInt(e.value, result.tline)
+    of "tcolumn": discard parseInt(e.value, result.tcolumn)
     of "output":
       result.action = actionRun
       result.outp = e.value
@@ -137,8 +154,28 @@ proc parseSpec*(filename: string): TSpec =
     of "nimout":
       result.nimout = e.value
     of "disabled":
-      if parseCfgBool(e.value): result.err = reIgnored
-    of "cmd": result.cmd = e.value
+      case e.value.normalize
+      of "y", "yes", "true", "1", "on": result.err = reIgnored
+      of "n", "no", "false", "0", "off": discard
+      of "win", "windows":
+        when defined(windows): result.err = reIgnored
+      of "linux":
+        when defined(linux): result.err = reIgnored
+      of "bsd":
+        when defined(bsd): result.err = reIgnored
+      of "macosx":
+        when defined(macosx): result.err = reIgnored
+      of "unix":
+        when defined(unix): result.err = reIgnored
+      of "posix":
+        when defined(posix): result.err = reIgnored
+      else:
+        raise newException(ValueError, "cannot interpret as a bool: " & e.value)
+    of "cmd":
+      if e.value.startsWith("nim "):
+        result.cmd = "compiler" / e.value
+      else:
+        result.cmd = e.value
     of "ccodecheck": result.ccodeCheck = e.value
     of "target", "targets":
       for v in e.value.normalize.split:

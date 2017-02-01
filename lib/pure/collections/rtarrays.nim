@@ -18,10 +18,10 @@ type
   RtArray*[T] = object  ##
     L: Natural
     spart: seq[T]
-    apart: array [ArrayPartSize, T]
+    apart: array[ArrayPartSize, T]
   UncheckedArray* {.unchecked.}[T] = array[0..100_000_000, T]
 
-template usesSeqPart(x): expr = x.L > ArrayPartSize
+template usesSeqPart(x): untyped = x.L > ArrayPartSize
 
 proc initRtArray*[T](len: Natural): RtArray[T] =
   result.L = len

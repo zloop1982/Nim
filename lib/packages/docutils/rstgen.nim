@@ -139,7 +139,7 @@ proc initRstGenerator*(g: var RstGenerator, target: OutputTarget,
   g.seenIndexTerms = initTable[string, int]()
   g.msgHandler = msgHandler
 
-  let s = config["split.item.toc"]
+  let s = config.getOrDefault"split.item.toc"
   if s != "": g.splitAfter = parseInt(s)
   for i in low(g.meta)..high(g.meta): g.meta[i] = ""
 
@@ -341,10 +341,10 @@ proc renderIndexTerm*(d: PDoc, n: PRstNode, result: var string) =
   ## previously appeared to give a different identifier value for each.
   let refname = n.rstnodeToRefname
   if d.seenIndexTerms.hasKey(refname):
-    d.seenIndexTerms[refname] = d.seenIndexTerms[refname] + 1
+    d.seenIndexTerms[refname] = d.seenIndexTerms.getOrDefault(refname) + 1
   else:
     d.seenIndexTerms[refname] = 1
-  let id = refname & '_' & $d.seenIndexTerms[refname]
+  let id = refname & '_' & $d.seenIndexTerms.getOrDefault(refname)
 
   var term = ""
   renderAux(d, n, term)
@@ -415,18 +415,28 @@ proc sortIndex(a: var openArray[IndexEntry]) =
       a[j] <- v
     if h == 1: break
 
+proc escapeLink(s: string): string =
+  result = newStringOfCap(s.len + s.len shr 2)
+  for c in items(s):
+    case c
+    of 'a'..'z', '_', 'A'..'Z', '0'..'9', '.', '#', ',', '/':
+      result.add c
+    else:
+      add(result, "%")
+      add(result, toHex(ord(c), 2))
+
 proc generateSymbolIndex(symbols: seq[IndexEntry]): string =
-  result = ""
+  result = "<dl>"
   var i = 0
   while i < symbols.len:
-    let keyword= symbols[i].keyword
-    let cleaned_keyword = keyword[1..keyword.high - 1]
-    result.addf("<dt><a name=\"$2\" href=\"#$2\"><span>$1:</span></a></dt><ul class=\"simple\"><dd>\n",
+    let keyword = symbols[i].keyword
+    let cleaned_keyword = keyword.escapeLink
+    result.addf("<dt><a name=\"$2\" href=\"#$2\"><span>$1:</span></a></dt><dd><ul class=\"simple\">\n",
                 [keyword, cleaned_keyword])
     var j = i
     while j < symbols.len and keyword == symbols[j].keyword:
       let
-        url = symbols[j].link
+        url = symbols[j].link.escapeLink
         text = if not symbols[j].linkTitle.isNil: symbols[j].linkTitle else: url
         desc = if not symbols[j].linkDesc.isNil: symbols[j].linkDesc else: ""
       if desc.len > 0:
@@ -439,6 +449,7 @@ proc generateSymbolIndex(symbols: seq[IndexEntry]): string =
       inc j
     result.add("</ul></dd>\n")
     i = j
+  result.add("</dl>")
 
 proc isDocumentationTitle(hyperlink: string): bool =
   ## Returns true if the hyperlink is actually a documentation title.
@@ -463,9 +474,9 @@ proc indentToLevel(level: var int, newLevel: int): string =
   if level == newLevel:
     return
   if newLevel > level:
-    result = repeat("<ul>", newLevel - level)
+    result = repeat("<li><ul>", newLevel - level)
   else:
-    result = repeat("</ul>", level - newLevel)
+    result = repeat("</ul></li>", level - newLevel)
   level = newLevel
 
 proc generateDocumentationTOC(entries: seq[IndexEntry]): string =
@@ -503,7 +514,7 @@ proc generateDocumentationTOC(entries: seq[IndexEntry]): string =
     else:
       result.add(level.indentToLevel(levels[L].level))
       result.add("<li><a href=\"" & link & "\">" &
-        levels[L].text & "</a>\n")
+        levels[L].text & "</a></li>\n")
     inc L
   result.add(level.indentToLevel(1) & "</ul>\n")
   assert(not titleRef.isNil,
@@ -518,9 +529,9 @@ proc generateDocumentationIndex(docs: IndexedDocs): string =
   sort(titles, cmp)
 
   for title in titles:
-    let tocList = generateDocumentationTOC(docs[title])
+    let tocList = generateDocumentationTOC(docs.getOrDefault(title))
     result.add("<ul><li><a href=\"" &
-      title.link & "\">" & title.keyword & "</a>\n" & tocList & "</ul>\n")
+      title.link & "\">" & title.keyword & "</a>\n" & tocList & "</li></ul>\n")
 
 proc generateDocumentationJumps(docs: IndexedDocs): string =
   ## Returns a plain list of hyperlinks to documentation TOCs in HTML.
@@ -534,7 +545,7 @@ proc generateDocumentationJumps(docs: IndexedDocs): string =
   for title in titles:
     chunks.add("<a href=\"" & title.link & "\">" & title.keyword & "</a>")
 
-  result.add(chunks.join(", ") & ".<br>")
+  result.add(chunks.join(", ") & ".<br/>")
 
 proc generateModuleJumps(modules: seq[string]): string =
   ## Returns a plain list of hyperlinks to the list of modules.
@@ -544,7 +555,7 @@ proc generateModuleJumps(modules: seq[string]): string =
   for name in modules:
     chunks.add("<a href=\"" & name & ".html\">" & name & "</a>")
 
-  result.add(chunks.join(", ") & ".<br>")
+  result.add(chunks.join(", ") & ".<br/>")
 
 proc readIndexDir(dir: string):
     tuple[modules: seq[string], symbols: seq[IndexEntry], docs: IndexedDocs] =
@@ -755,12 +766,17 @@ proc renderTocEntries*(d: var RstGenerator, j: var int, lvl: int,
 
 proc renderImage(d: PDoc, n: PRstNode, result: var string) =
   template valid(s): expr =
-    s.len > 0 and allCharsInSet(s, {'/',':','%','_','\\','\128'..'\xFF'} +
+    s.len > 0 and allCharsInSet(s, {'.','/',':','%','_','\\','\128'..'\xFF'} +
                                    Digits + Letters + WhiteSpace)
-
-  var options = ""
+  let
+    arg = getArgument(n)
+    isObject = arg.toLower().endsWith(".svg")
+  var
+    options = ""
+    content = ""
   var s = getFieldValue(n, "scale")
-  if s.valid: dispA(d.target, options, " scale=\"$1\"", " scale=$1", [strip(s)])
+  if s.valid: dispA(d.target, options, if isObject: "" else: " scale=\"$1\"",
+                    " scale=$1", [strip(s)])
 
   s = getFieldValue(n, "height")
   if s.valid: dispA(d.target, options, " height=\"$1\"", " height=$1", [strip(s)])
@@ -769,16 +785,21 @@ proc renderImage(d: PDoc, n: PRstNode, result: var string) =
   if s.valid: dispA(d.target, options, " width=\"$1\"", " width=$1", [strip(s)])
 
   s = getFieldValue(n, "alt")
-  if s.valid: dispA(d.target, options, " alt=\"$1\"", "", [strip(s)])
+  if s.valid:
+    # <object> displays its content if it cannot render the image
+    if isObject: dispA(d.target, content, "$1", "", [strip(s)])
+    else: dispA(d.target, options, " alt=\"$1\"", "", [strip(s)])
 
   s = getFieldValue(n, "align")
   if s.valid: dispA(d.target, options, " align=\"$1\"", "", [strip(s)])
 
   if options.len > 0: options = dispF(d.target, "$1", "[$1]", [options])
 
-  let arg = getArgument(n)
   if arg.valid:
-    dispA(d.target, result, "<img src=\"$1\"$2 />", "\\includegraphics$2{$1}",
+    let htmlOut = if isObject:
+        "<object data=\"$1\" type=\"image/svg+xml\"$2 >" & content & "</object>"
+        else: "<img src=\"$1\"$2 />"
+    dispA(d.target, result, htmlOut, "\\includegraphics$2{$1}",
           [arg, options])
   if len(n) >= 3: renderRstToOut(d, n.sons[2], result)
 
@@ -786,7 +807,8 @@ proc renderSmiley(d: PDoc, n: PRstNode, result: var string) =
   dispA(d.target, result,
     """<img src="$1" width="15"
         height="17" hspace="2" vspace="2" class="smiley" />""",
-    "\\includegraphics{$1}", [d.config["doc.smiley_format"] % n.text])
+    "\\includegraphics{$1}",
+    [d.config.getOrDefault"doc.smiley_format" % n.text])
 
 proc parseCodeBlockField(d: PDoc, n: PRstNode, params: var CodeBlockParams) =
   ## Parses useful fields which can appear before a code block.
@@ -801,7 +823,7 @@ proc parseCodeBlockField(d: PDoc, n: PRstNode, params: var CodeBlockParams) =
     if parseInt(n.getFieldValue, number) > 0:
       params.startLine = number
   of "file":
-    # The ``file`` option is a Nimrod extension to the official spec, it acts
+    # The ``file`` option is a Nim extension to the official spec, it acts
     # like it would for other directives like ``raw`` or ``cvs-table``. This
     # field is dealt with in ``rst.nim`` which replaces the existing block with
     # the referenced file, so we only need to ignore it here to avoid incorrect
@@ -844,8 +866,8 @@ proc buildLinesHTMLTable(d: PDoc; params: CodeBlockParams, code: string):
   inc d.listingCounter
   let id = $d.listingCounter
   if not params.numberLines:
-    result = (d.config["doc.listing_start"] % id,
-              d.config["doc.listing_end"] % id)
+    result = (d.config.getOrDefault"doc.listing_start" % id,
+              d.config.getOrDefault"doc.listing_end" % id)
     return
 
   var codeLines = 1 + code.strip.countLines
@@ -856,9 +878,11 @@ proc buildLinesHTMLTable(d: PDoc; params: CodeBlockParams, code: string):
     result.beginTable.add($line & "\n")
     line.inc
     codeLines.dec
-  result.beginTable.add("</pre></td><td>" & (d.config["doc.listing_start"] % id))
-  result.endTable = (d.config["doc.listing_end"] % id) &
-      "</td></tr></tbody></table>" & (d.config["doc.listing_button"] % id)
+  result.beginTable.add("</pre></td><td>" & (
+      d.config.getOrDefault"doc.listing_start" % id))
+  result.endTable = (d.config.getOrDefault"doc.listing_end" % id) &
+      "</td></tr></tbody></table>" & (
+      d.config.getOrDefault"doc.listing_button" % id)
 
 proc renderCodeBlock(d: PDoc, n: PRstNode, result: var string) =
   ## Renders a code block, appending it to `result`.
@@ -868,7 +892,7 @@ proc renderCodeBlock(d: PDoc, n: PRstNode, result: var string) =
   ## second the code block itself. The code block can use syntax highlighting,
   ## which depends on the directive argument specified by the rst input, and
   ## may also come from the parser through the internal ``default-language``
-  ## option to differentiate between a plain code block and nimrod's code block
+  ## option to differentiate between a plain code block and Nim's code block
   ## extension.
   assert n.kind == rnCodeBlock
   if n.sons[2] == nil: return

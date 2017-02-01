@@ -31,3 +31,31 @@ proc main =
   echo y
 
 main()
+
+# Test: pass var seq to var openarray
+var s = @[2, 1]
+proc foo(a: var openarray[int]) = a[0] = 123
+
+proc bar(s: var seq[int], a: int) =
+  doAssert(a == 5)
+  foo(s)
+s.bar(5)
+doAssert(s == @[123, 1])
+
+import tables
+block: # Test get addr of byvar return value
+  var t = initTable[string, int]()
+  t["hi"] = 5
+  let a = addr t["hi"]
+  a[] = 10
+  doAssert(t["hi"] == 10)
+
+block: # Test var arg inside case expression. #5244
+  proc foo(a: var string) =
+    a = case a
+    of "a": "error"
+    of "b": "error"
+    else: a
+  var a = "ok"
+  foo(a)
+  doAssert(a == "ok")

@@ -25,16 +25,22 @@ proc copyNode(ctx: TemplCtx, a, b: PNode): PNode =
   if ctx.instLines: result.info = b.info
 
 proc evalTemplateAux(templ, actual: PNode, c: var TemplCtx, result: PNode) =
+  template handleParam(param) =
+    let x = param
+    if x.kind == nkArgList:
+      for y in items(x): result.add(y)
+    else:
+      result.add copyTree(x)
+
   case templ.kind
   of nkSym:
     var s = templ.sym
     if s.owner.id == c.owner.id:
       if s.kind == skParam and sfGenSym notin s.flags:
-        let x = actual.sons[s.position]
-        if x.kind == nkArgList:
-          for y in items(x): result.add(y)
-        else:
-          result.add copyTree(x)
+        handleParam actual.sons[s.position]
+      elif s.kind == skGenericParam or
+           s.kind == skType and s.typ != nil and s.typ.kind == tyGenericParam:
+        handleParam actual.sons[s.owner.typ.len + s.position - 1]
       else:
         internalAssert sfGenSym in s.flags
         var x = PSym(idTableGet(c.mapping, s))
@@ -53,37 +59,78 @@ proc evalTemplateAux(templ, actual: PNode, c: var TemplCtx, result: PNode) =
       evalTemplateAux(templ.sons[i], actual, c, res)
     result.add res
 
-proc evalTemplateArgs(n: PNode, s: PSym): PNode =
+proc evalTemplateArgs(n: PNode, s: PSym; fromHlo: bool): PNode =
   # if the template has zero arguments, it can be called without ``()``
   # `n` is then a nkSym or something similar
-  var a: int
-  case n.kind
-  of nkCall, nkInfix, nkPrefix, nkPostfix, nkCommand, nkCallStrLit:
-    a = sonsLen(n)
-  else: a = 0
-  var f = s.typ.sonsLen
-  if a > f: globalError(n.info, errWrongNumberOfArguments)
+  var totalParams = case n.kind
+    of nkCall, nkInfix, nkPrefix, nkPostfix, nkCommand, nkCallStrLit: n.len-1
+    else: 0
+
+  var
+    # XXX: Since immediate templates are not subject to the
+    # standard sigmatching algorithm, they will have a number
+    # of deficiencies when it comes to generic params:
+    # Type dependencies between the parameters won't be honoured
+    # and the bound generic symbols won't be resolvable within
+    # their bodies. We could try to fix this, but it may be
+    # wiser to just deprecate immediate templates and macros
+    # now that we have working untyped parameters.
+    genericParams = if sfImmediate in s.flags or fromHlo: 0
+                    else: s.ast[genericParamsPos].len
+    expectedRegularParams = <s.typ.len
+    givenRegularParams = totalParams - genericParams
+  if givenRegularParams < 0: givenRegularParams = 0
+  if totalParams > expectedRegularParams + genericParams:
+    globalError(n.info, errWrongNumberOfArguments)
 
   result = newNodeI(nkArgList, n.info)
-  for i in countup(1, f - 1):
-    var arg = if i < a: n.sons[i] else: copyTree(s.typ.n.sons[i].sym.ast)
-    if arg == nil or arg.kind == nkEmpty:
+  for i in 1 .. givenRegularParams:
+    result.addSon n.sons[i]
+
+  # handle parameters with default values, which were
+  # not supplied by the user
+  for i in givenRegularParams+1 .. expectedRegularParams:
+    let default = s.typ.n.sons[i].sym.ast
+    if default.isNil or default.kind == nkEmpty:
       localError(n.info, errWrongNumberOfArguments)
       addSon(result, ast.emptyNode)
     else:
-      addSon(result, arg)
+      addSon(result, default.copyTree)
+
+  # add any generic paramaters
+  for i in 1 .. genericParams:
+    result.addSon n.sons[givenRegularParams + i]
 
 var evalTemplateCounter* = 0
   # to prevent endless recursion in templates instantiation
 
-proc evalTemplate*(n: PNode, tmpl, genSymOwner: PSym): PNode =
+proc wrapInComesFrom*(info: TLineInfo; res: PNode): PNode =
+  when true:
+    result = res
+    result.info = info
+    if result.kind in {nkStmtList, nkStmtListExpr} and result.len > 0:
+      result.lastSon.info = info
+    when false:
+      # this hack is required to
+      var x = result
+      while x.kind == nkStmtListExpr: x = x.lastSon
+      if x.kind in nkCallKinds:
+        for i in 1..<x.len:
+          if x[i].kind in nkCallKinds:
+            x.sons[i].info = info
+  else:
+    result = newNodeI(nkPar, info)
+    result.add res
+    result.flags.incl nfNone
+
+proc evalTemplate*(n: PNode, tmpl, genSymOwner: PSym; fromHlo=false): PNode =
   inc(evalTemplateCounter)
   if evalTemplateCounter > 100:
     globalError(n.info, errTemplateInstantiationTooNested)
     result = n
 
   # replace each param by the corresponding node:
-  var args = evalTemplateArgs(n, tmpl)
+  var args = evalTemplateArgs(n, tmpl, fromHlo)
   var ctx: TemplCtx
   ctx.owner = tmpl
   ctx.genSymOwner = genSymOwner
@@ -99,10 +146,10 @@ proc evalTemplate*(n: PNode, tmpl, genSymOwner: PSym): PNode =
                   renderTree(result, {renderNoComments}))
   else:
     result = copyNode(body)
-    ctx.instLines = body.kind notin {nkStmtList, nkStmtListExpr,
-                                     nkBlockStmt, nkBlockExpr}
-    if ctx.instLines: result.info = n.info
+    #ctx.instLines = body.kind notin {nkStmtList, nkStmtListExpr,
+    #                                 nkBlockStmt, nkBlockExpr}
+    #if ctx.instLines: result.info = n.info
     for i in countup(0, safeLen(body) - 1):
       evalTemplateAux(body.sons[i], args, ctx, result)
-
+  result = wrapInComesFrom(n.info, result)
   dec(evalTemplateCounter)

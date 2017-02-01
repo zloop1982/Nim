@@ -18,8 +18,9 @@ type Rational*[T] = object
   ## a rational number, consisting of a numerator and denominator
   num*, den*: T
 
-proc initRational*[T](num, den: T): Rational[T] =
+proc initRational*[T:SomeInteger](num, den: T): Rational[T] =
   ## Create a new rational number.
+  assert(den != 0, "a denominator of zero value is invalid")
   result.num = num
   result.den = den
 
@@ -33,10 +34,67 @@ proc `$`*[T](x: Rational[T]): string =
   ## Turn a rational number into a string.
   result = $x.num & "/" & $x.den
 
-proc toRational*[T](x: T): Rational[T] =
+proc toRational*[T:SomeInteger](x: T): Rational[T] =
   ## Convert some integer `x` to a rational number.
   result.num = x
   result.den = 1
+
+proc toRationalSub(x: float, n: int): Rational[int] =
+  var
+    a = 0'i64
+    b, c, d = 1'i64
+  result = 0 // 1   # rational 0
+  while b <= n and d <= n:
+    let ac = (a+c)
+    let bd = (b+d)
+    # scale by 1000 so not overflow for high precision
+    let mediant = (ac.float/1000) / (bd.float/1000)
+    if x == mediant:
+      if bd <= n:
+        result.num = ac.int
+        result.den = bd.int
+        return result
+      elif d > b:
+        result.num = c.int
+        result.den = d.int
+        return result
+      else:
+        result.num = a.int
+        result.den = b.int
+        return result
+    elif x > mediant:
+      a = ac
+      b = bd
+    else:
+      c = ac
+      d = bd
+  if (b > n):
+    return initRational(c.int, d.int)
+  return initRational(a.int, b.int)
+
+proc toRational*(x: float, n: int = high(int)): Rational[int] =
+  ## Calculate the best rational numerator and denominator
+  ## that approximates to `x`, where the denominator is
+  ## smaller than `n` (default is the largest possible
+  ## int to give maximum resolution)
+  ##
+  ## The algorithm is based on the Farey sequence named
+  ## after John Farey
+  ##
+  ## .. code-block:: Nim
+  ##  import math, rationals
+  ##  for i in 1..10:
+  ##    let t = (10 ^ (i+3)).int
+  ##    let x = toRational(PI, t)
+  ##    let newPI = x.num / x.den
+  ##    echo x, " ", newPI, " error: ", PI - newPI, "  ", t
+  if x > 1:
+    result = toRationalSub(1.0/x, n)
+    swap(result.num, result.den)
+  elif x == 1.0:
+    result = 1 // 1
+  else:
+    result = toRationalSub(x, n)
 
 proc toFloat*[T](x: Rational[T]): float =
   ## Convert a rational number `x` to a float.
@@ -47,7 +105,7 @@ proc toInt*[T](x: Rational[T]): int =
   ## `x` does not contain an integer value.
   x.num div x.den
 
-proc reduce*[T](x: var Rational[T]) =
+proc reduce*[T:SomeInteger](x: var Rational[T]) =
   ## Reduce rational `x`.
   let common = gcd(x.num, x.den)
   if x.den > 0:
@@ -106,7 +164,7 @@ proc `-` *[T](x: Rational[T], y: T): Rational[T] =
 
 proc `-` *[T](x: T, y: Rational[T]): Rational[T] =
   ## Subtract rational `y` from int `x`.
-  result.num = - x * y.den + y.num
+  result.num = x * y.den - y.num
   result.den = y.den
 
 proc `-=` *[T](x: var Rational[T], y: Rational[T]) =
@@ -216,7 +274,7 @@ proc hash*[T](x: Rational[T]): Hash =
   h = h !& hash(copy.num)
   h = h !& hash(copy.den)
   result = !$h
-  
+
 when isMainModule:
   var
     z = Rational[int](num: 0, den: 1)
@@ -287,3 +345,8 @@ when isMainModule:
   assert toRational(5) == 5//1
   assert abs(toFloat(y) - 0.4814814814814815) < 1.0e-7
   assert toInt(z) == 0
+
+  assert toRational(0.98765432) == 12345679 // 12500000
+  assert toRational(0.1, 1000000) == 1 // 10
+  assert toRational(0.9, 1000000) == 9 // 10
+  #assert toRational(PI) == 80143857 // 25510582

@@ -1,6 +1,6 @@
 discard """
   line: 16
-  errormsg: "type mismatch: got (BPtr) but expected 'APtr'"
+  errormsg: "type mismatch: got (BPtr) but expected 'APtr = ptr[RegionA, int]'"
 """
 
 type
@@ -8,7 +8,7 @@ type
   APtr = RegionA ptr int
   RegionB = object
   BPtr = RegionB ptr int
-  
+
 var x,xx: APtr
 var y: BPtr
 x = nil

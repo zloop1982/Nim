@@ -9,7 +9,7 @@
 
 import
   intsets, ast, astalgo, msgs, renderer, magicsys, types, idents, trees,
-  wordrecg, strutils, options, guards
+  wordrecg, strutils, options, guards, writetracking
 
 # Second semantic checking pass over the AST. Necessary because the old
 # way had some inherent problems. Performs:
@@ -17,7 +17,7 @@ import
 # * effect+exception tracking
 # * "usage before definition" checking
 # * checks for invalid usages of compiletime magics (not implemented)
-# * checks for invalid usages of PNimNode (not implemented)
+# * checks for invalid usages of NimNode (not implemented)
 # * later: will do an escape analysis for closures at least
 
 # Predefined effects:
@@ -28,21 +28,6 @@ import
 #   endless (has endless loops), --> user effects are defined over *patterns*
 #   --> a TR macro can annotate the proc with user defined annotations
 #   --> the effect system can access these
-
-# Load&Store analysis is performed on *paths*. A path is an access like
-# obj.x.y[i].z; splitting paths up causes some problems:
-#
-# var x = obj.x
-# var z = x.y[i].z
-#
-# Alias analysis is affected by this too! A good solution is *type splitting*:
-# T becomes T1 and T2 if it's known that T1 and T2 can't alias.
-#
-# An aliasing problem and a race condition are effectively the same problem.
-# Type based alias analysis is nice but not sufficient; especially splitting
-# an array and filling it in parallel should be supported but is not easily
-# done: It essentially requires a built-in 'indexSplit' operation and dependent
-# typing.
 
 # ------------------------ exception and tag tracking -------------------------
 
@@ -74,7 +59,7 @@ type
     init: seq[int] # list of initialized variables
     guards: TModel # nested guards
     locked: seq[PNode] # locked locations
-    gcUnsafe, isRecursive, isToplevel: bool
+    gcUnsafe, isRecursive, isToplevel, hasSideEffect, inEnforcedGcSafe: bool
     maxLockLevel, currLockLevel: TLockLevel
   PEffects = var TEffects
 
@@ -146,7 +131,7 @@ proc guardDotAccess(a: PEffects; n: PNode) =
         if field != nil: break
         ty = ty.sons[0]
         if ty == nil: break
-        ty = ty.skipTypes(abstractPtrs)
+        ty = ty.skipTypes(skipPtrs)
     if field == nil:
       localError(n.info, errGenerated, "invalid guard field: " & g.name.s)
       return
@@ -166,7 +151,7 @@ proc guardDotAccess(a: PEffects; n: PNode) =
     guardGlobal(a, n, g)
 
 proc makeVolatile(a: PEffects; s: PSym) {.inline.} =
-  template compileToCpp(a): expr =
+  template compileToCpp(a): untyped =
     gCmd == cmdCompileToCpp or sfCompileToCpp in getModule(a.owner).flags
   if a.inTryStmt > 0 and not compileToCpp(a):
     incl(s.flags, sfVolatile)
@@ -195,32 +180,47 @@ proc warnAboutGcUnsafe(n: PNode) =
   message(n.info, warnGcUnsafe, renderTree(n))
 
 proc markGcUnsafe(a: PEffects; reason: PSym) =
-  a.gcUnsafe = true
-  if a.owner.kind in routineKinds: a.owner.gcUnsafetyReason = reason
+  if not a.inEnforcedGcSafe:
+    a.gcUnsafe = true
+    if a.owner.kind in routineKinds: a.owner.gcUnsafetyReason = reason
 
 proc markGcUnsafe(a: PEffects; reason: PNode) =
-  a.gcUnsafe = true
-  if a.owner.kind in routineKinds:
-    if reason.kind == nkSym:
-      a.owner.gcUnsafetyReason = reason.sym
-    else:
-      a.owner.gcUnsafetyReason = newSym(skUnknown, getIdent("<unknown>"),
-                                        a.owner, reason.info)
+  if not a.inEnforcedGcSafe:
+    a.gcUnsafe = true
+    if a.owner.kind in routineKinds:
+      if reason.kind == nkSym:
+        a.owner.gcUnsafetyReason = reason.sym
+      else:
+        a.owner.gcUnsafetyReason = newSym(skUnknown, getIdent("<unknown>"),
+                                          a.owner, reason.info)
+
+when true:
+  template markSideEffect(a: PEffects; reason: typed) =
+    a.hasSideEffect = true
+else:
+  template markSideEffect(a: PEffects; reason: typed) =
+    a.hasSideEffect = true
+    markGcUnsafe(a, reason)
 
 proc listGcUnsafety(s: PSym; onlyWarning: bool; cycleCheck: var IntSet) =
   let u = s.gcUnsafetyReason
   if u != nil and not cycleCheck.containsOrIncl(u.id):
     let msgKind = if onlyWarning: warnGcUnsafe2 else: errGenerated
-    if u.kind in {skLet, skVar}:
+    case u.kind
+    of skLet, skVar:
       message(s.info, msgKind,
         ("'$#' is not GC-safe as it accesses '$#'" &
         " which is a global using GC'ed memory") % [s.name.s, u.name.s])
-    elif u.kind in routineKinds:
+    of routineKinds:
       # recursive call *always* produces only a warning so the full error
       # message is printed:
       listGcUnsafety(u, true, cycleCheck)
       message(s.info, msgKind,
         "'$#' is not GC-safe as it calls '$#'" %
+        [s.name.s, u.name.s])
+    of skParam:
+      message(s.info, msgKind,
+        "'$#' is not GC-safe as it performs an indirect call via '$#'" %
         [s.name.s, u.name.s])
     else:
       internalAssert u.kind == skUnknown
@@ -241,12 +241,16 @@ proc useVar(a: PEffects, n: PNode) =
         message(n.info, warnUninit, s.name.s)
       # prevent superfluous warnings about the same variable:
       a.init.add s.id
-  if {sfGlobal, sfThread} * s.flags != {} and s.kind in {skVar, skLet}:
+  if {sfGlobal, sfThread} * s.flags != {} and s.kind in {skVar, skLet} and
+      s.magic != mNimVm:
     if s.guard != nil: guardGlobal(a, n, s.guard)
     if {sfGlobal, sfThread} * s.flags == {sfGlobal} and
         (tfHasGCedMem in s.typ.flags or s.typ.isGCedMem):
       #if warnGcUnsafe in gNotes: warnAboutGcUnsafe(n)
       markGcUnsafe(a, s)
+    else:
+      markSideEffect(a, s)
+
 
 type
   TIntersection = seq[tuple[id, count: int]] # a simple count table
@@ -282,10 +286,6 @@ proc createTag(n: PNode): PNode =
   else:
     result.typ = sysTypeFromName"TEffect"
   if not n.isNil: result.info = n.info
-
-proc createAnyGlobal(n: PNode): PNode =
-  result = newSymNode(anyGlobal)
-  result.info = n.info
 
 proc addEffect(a: PEffects, e: PNode, useLineInfo=true) =
   assert e.kind != nkRaiseStmt
@@ -438,19 +438,43 @@ proc documentEffect(n, x: PNode, effectType: TSpecialWord, idx: int): PNode =
     result = newNode(nkExprColonExpr, n.info, @[
       newIdentNode(getIdent(specialWords[effectType]), n.info), effects])
 
+proc documentWriteEffect(n: PNode; flag: TSymFlag; pragmaName: string): PNode =
+  let s = n.sons[namePos].sym
+  let params = s.typ.n
+
+  var effects = newNodeI(nkBracket, n.info)
+  for i in 1 ..< params.len:
+    if params[i].kind == nkSym and flag in params[i].sym.flags:
+      effects.add params[i]
+
+  if effects.len > 0:
+    result = newNode(nkExprColonExpr, n.info, @[
+      newIdentNode(getIdent(pragmaName), n.info), effects])
+
+proc documentNewEffect(n: PNode): PNode =
+  let s = n.sons[namePos].sym
+  if tfReturnsNew in s.typ.flags:
+    result = newIdentNode(getIdent("new"), n.info)
+
 proc documentRaises*(n: PNode) =
   if n.sons[namePos].kind != nkSym: return
   let pragmas = n.sons[pragmasPos]
   let p1 = documentEffect(n, pragmas, wRaises, exceptionEffects)
   let p2 = documentEffect(n, pragmas, wTags, tagEffects)
+  let p3 = documentWriteEffect(n, sfWrittenTo, "writes")
+  let p4 = documentNewEffect(n)
+  let p5 = documentWriteEffect(n, sfEscapes, "escapes")
 
-  if p1 != nil or p2 != nil:
+  if p1 != nil or p2 != nil or p3 != nil or p4 != nil or p5 != nil:
     if pragmas.kind == nkEmpty:
       n.sons[pragmasPos] = newNodeI(nkPragma, n.info)
     if p1 != nil: n.sons[pragmasPos].add p1
     if p2 != nil: n.sons[pragmasPos].add p2
+    if p3 != nil: n.sons[pragmasPos].add p3
+    if p4 != nil: n.sons[pragmasPos].add p4
+    if p5 != nil: n.sons[pragmasPos].add p5
 
-template notGcSafe(t): expr = {tfGcSafe, tfNoSideEffect} * t.flags == {}
+template notGcSafe(t): untyped = {tfGcSafe, tfNoSideEffect} * t.flags == {}
 
 proc importedFromC(n: PNode): bool =
   # when imported from C, we assume GC-safety.
@@ -486,6 +510,8 @@ proc propagateEffects(tracked: PEffects, n: PNode, s: PSym) =
   if notGcSafe(s.typ) and sfImportc notin s.flags:
     if warnGcUnsafe in gNotes: warnAboutGcUnsafe(n)
     markGcUnsafe(tracked, s)
+  if tfNoSideEffect notin s.typ.flags:
+    markSideEffect(tracked, s)
   mergeLockLevels(tracked, n, s.getLockLevel)
 
 proc notNilCheck(tracked: PEffects, n: PNode, paramType: PType) =
@@ -495,7 +521,8 @@ proc notNilCheck(tracked: PEffects, n: PNode, paramType: PType) =
     if n.kind == nkAddr:
       # addr(x[]) can't be proven, but addr(x) can:
       if not containsNode(n, {nkDerefExpr, nkHiddenDeref}): return
-    elif (n.kind == nkSym and n.sym.kind in routineKinds) or n.kind in procDefs:
+    elif (n.kind == nkSym and n.sym.kind in routineKinds) or
+         n.kind in procDefs+{nkObjConstr, nkBracket}:
       # 'p' is not nil obviously:
       return
     case impliesNotNil(tracked.guards, n)
@@ -522,7 +549,7 @@ proc isOwnedProcVar(n: PNode; owner: PSym): bool =
 proc trackOperand(tracked: PEffects, n: PNode, paramType: PType) =
   let a = skipConvAndClosure(n)
   let op = a.typ
-  if op != nil and op.kind == tyProc and n.kind != nkNilLit:
+  if op != nil and op.kind == tyProc and n.skipConv.kind != nkNilLit:
     internalAssert op.n.sons[0].kind == nkEffectList
     var effectList = op.n.sons[0]
     let s = n.skipConv
@@ -540,12 +567,16 @@ proc trackOperand(tracked: PEffects, n: PNode, paramType: PType) =
       if notGcSafe(op) and not isOwnedProcVar(a, tracked.owner):
         if warnGcUnsafe in gNotes: warnAboutGcUnsafe(n)
         markGcUnsafe(tracked, a)
+      elif tfNoSideEffect notin op.flags and not isOwnedProcVar(a, tracked.owner):
+        markSideEffect(tracked, a)
     else:
       mergeEffects(tracked, effectList.sons[exceptionEffects], n)
       mergeTags(tracked, effectList.sons[tagEffects], n)
       if notGcSafe(op):
         if warnGcUnsafe in gNotes: warnAboutGcUnsafe(n)
         markGcUnsafe(tracked, a)
+      elif tfNoSideEffect notin op.flags:
+        markSideEffect(tracked, a)
   notNilCheck(tracked, n, paramType)
 
 proc breaksBlock(n: PNode): bool =
@@ -674,6 +705,7 @@ proc track(tracked: PEffects, n: PNode) =
         if a.sym == tracked.owner: tracked.isRecursive = true
         # even for recursive calls we need to check the lock levels (!):
         mergeLockLevels(tracked, n, a.sym.getLockLevel)
+        if sfSideEffect in a.sym.flags: markSideEffect(tracked, a)
       else:
         mergeLockLevels(tracked, n, op.lockLevel)
       var effectList = op.n.sons[0]
@@ -690,12 +722,25 @@ proc track(tracked: PEffects, n: PNode) =
         if notGcSafe(op) and not importedFromC(a):
           # and it's not a recursive call:
           if not (a.kind == nkSym and a.sym == tracked.owner):
-            warnAboutGcUnsafe(n)
+            if warnGcUnsafe in gNotes: warnAboutGcUnsafe(n)
             markGcUnsafe(tracked, a)
-    for i in 1 .. <len(n): trackOperand(tracked, n.sons[i], paramType(op, i))
+        if tfNoSideEffect notin op.flags and not importedFromC(a):
+          # and it's not a recursive call:
+          if not (a.kind == nkSym and a.sym == tracked.owner):
+            markSideEffect(tracked, a)
+    if a.kind != nkSym or a.sym.magic != mNBindSym:
+      for i in 1 .. <len(n): trackOperand(tracked, n.sons[i], paramType(op, i))
     if a.kind == nkSym and a.sym.magic in {mNew, mNewFinalize, mNewSeq}:
       # may not look like an assignment, but it is:
-      initVarViaNew(tracked, n.sons[1])
+      let arg = n.sons[1]
+      initVarViaNew(tracked, arg)
+      if {tfNeedsInit} * arg.typ.lastSon.flags != {}:
+        if a.sym.magic == mNewSeq and n[2].kind in {nkCharLit..nkUInt64Lit} and
+            n[2].intVal == 0:
+          # var s: seq[notnil];  newSeq(s, 0)  is a special case!
+          discard
+        else:
+          message(arg.info, warnProveInit, $arg)
     for i in 0 .. <safeLen(n):
       track(tracked, n.sons[i])
   of nkDotExpr:
@@ -726,7 +771,7 @@ proc track(tracked: PEffects, n: PNode) =
       # since 'var (a, b): T = ()' is not even allowed, there is always type
       # inference for (a, b) and thus no nil checking is necessary.
   of nkCaseStmt: trackCase(tracked, n)
-  of nkIfStmt, nkIfExpr: trackIf(tracked, n)
+  of nkWhen, nkIfStmt, nkIfExpr: trackIf(tracked, n)
   of nkBlockStmt, nkBlockExpr: trackBlock(tracked, n.sons[1])
   of nkWhileStmt:
     track(tracked, n.sons[0])
@@ -760,10 +805,16 @@ proc track(tracked: PEffects, n: PNode) =
     let pragmaList = n.sons[0]
     let oldLocked = tracked.locked.len
     let oldLockLevel = tracked.currLockLevel
+    var enforcedGcSafety = false
     for i in 0 .. <pragmaList.len:
-      if whichPragma(pragmaList.sons[i]) == wLocks:
+      let pragma = whichPragma(pragmaList.sons[i])
+      if pragma == wLocks:
         lockLocations(tracked, pragmaList.sons[i])
+      elif pragma == wGcSafe:
+        enforcedGcSafety = true
+    if enforcedGcSafety: tracked.inEnforcedGcSafe = true
     track(tracked, n.lastSon)
+    if enforcedGcSafety: tracked.inEnforcedGcSafe = false
     setLen(tracked.locked, oldLocked)
     tracked.currLockLevel = oldLockLevel
   of nkTypeSection, nkProcDef, nkConverterDef, nkMethodDef, nkIteratorDef,
@@ -774,9 +825,6 @@ proc track(tracked: PEffects, n: PNode) =
 
 proc subtypeRelation(spec, real: PNode): bool =
   result = safeInheritanceDiff(real.excType, spec.typ) <= 0
-
-proc symbolPredicate(spec, real: PNode): bool =
-  result = real.sym.id == spec.sym.id
 
 proc checkRaisesSpec(spec, real: PNode, msg: string, hints: bool;
                      effectPredicate: proc (a, b: PNode): bool {.nimcall.}) =
@@ -846,6 +894,8 @@ proc initEffects(effects: PNode; s: PSym; t: var TEffects) =
   newSeq(effects.sons, effectListLen)
   effects.sons[exceptionEffects] = newNodeI(nkArgList, s.info)
   effects.sons[tagEffects] = newNodeI(nkArgList, s.info)
+  effects.sons[usesEffects] = ast.emptyNode
+  effects.sons[writeEffects] = ast.emptyNode
 
   t.exc = effects.sons[exceptionEffects]
   t.tags = effects.sons[tagEffects]
@@ -864,7 +914,8 @@ proc trackProc*(s: PSym, body: PNode) =
   var t: TEffects
   initEffects(effects, s, t)
   track(t, body)
-  if not isEmptyType(s.typ.sons[0]) and tfNeedsInit in s.typ.sons[0].flags and
+  if not isEmptyType(s.typ.sons[0]) and
+      {tfNeedsInit, tfNotNil} * s.typ.sons[0].flags != {} and
       s.kind in {skProc, skConverter, skMethod}:
     var res = s.ast.sons[resultPos].sym # get result symbol
     if res.id notin t.init:
@@ -891,8 +942,15 @@ proc trackProc*(s: PSym, body: PNode) =
     else:
       listGcUnsafety(s, onlyWarning=true)
       #localError(s.info, warnGcUnsafe2, s.name.s)
+  if sfNoSideEffect in s.flags and t.hasSideEffect:
+    when false:
+      listGcUnsafety(s, onlyWarning=false)
+    else:
+      localError(s.info, errXhasSideEffects, s.name.s)
   if not t.gcUnsafe:
     s.typ.flags.incl tfGcSafe
+  if not t.hasSideEffect and sfSideEffect notin s.flags:
+    s.typ.flags.incl tfNoSideEffect
   if s.typ.lockLevel == UnspecifiedLockLevel:
     s.typ.lockLevel = t.maxLockLevel
   elif t.maxLockLevel > s.typ.lockLevel:
@@ -900,6 +958,7 @@ proc trackProc*(s: PSym, body: PNode) =
     message(s.info, warnLockLevel,
       "declared lock level is $1, but real lock level is $2" %
         [$s.typ.lockLevel, $t.maxLockLevel])
+  when useWriteTracking: trackWrites(s, body)
 
 proc trackTopLevelStmt*(module: PSym; n: PNode) =
   if n.kind in {nkPragma, nkMacroDef, nkTemplateDef, nkProcDef,

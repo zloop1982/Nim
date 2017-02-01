@@ -1,5 +1,5 @@
-import 
-  streams, md5, sockets, unsigned,
+import
+  streams, md5, sockets,
   sg_packets, zlib_helpers, idgen
 type
   TClientType* = enum
@@ -54,7 +54,7 @@ proc newClient*(addy: TupAddress): PClient =
   new(result, free)
   result.addy = addy
   result.outputBuf = newStringStream("")
-  result.outputBuf.flushImpl = proc(stream: PStream) = 
+  result.outputBuf.flushImpl = proc(stream: PStream) =
     stream.setPosition 0
     PStringStream(stream).data.setLen 0
 

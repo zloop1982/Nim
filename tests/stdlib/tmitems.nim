@@ -11,7 +11,7 @@ fpqeew
 [11, 12, 13]
 [11, 12, 13]
 [11, 12, 13]
-{"key1":11,"key2":12,"key3":13}
+11 12 13
 [11,12,13]
 <Students>
   <Student Name="Aprilfoo" />
@@ -98,13 +98,13 @@ block:
     x += 10
   echo sl
 
-import queues
+import deques
 
 block:
-  var q = initQueue[int]()
-  q.add(1)
-  q.add(2)
-  q.add(3)
+  var q = initDeque[int]()
+  q.addLast(1)
+  q.addLast(2)
+  q.addLast(3)
   for x in q.mitems:
     x += 10
   echo q
@@ -115,7 +115,7 @@ block:
   var j = parseJson """{"key1": 1, "key2": 2, "key3": 3}"""
   for key,val in j.pairs:
     val.num += 10
-  echo j
+  echo j["key1"], " ", j["key2"], " ", j["key3"]
 
 block:
   var j = parseJson """[1, 2, 3]"""
@@ -132,5 +132,5 @@ block:
   </Students>""")
   for x in d.mitems:
     x = <>Student(Name=x.attrs["Name"] & "foo")
-  d.mget(1).attrs["Name"] = "bar"
+  d[1].attrs["Name"] = "bar"
   echo d

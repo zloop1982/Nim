@@ -13,7 +13,7 @@
 ##
 ## **Note:** The current implementation of message passing is slow and does
 ## not work with cyclic data structures.
-  
+
 when not declared(NimString):
   {.error: "You must not import this module explicitly".}
 
@@ -50,15 +50,16 @@ proc deinitRawChannel(p: pointer) =
   deinitSys(c.lock)
   deinitSysCond(c.cond)
 
-proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel, 
+proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
               mode: LoadStoreMode) {.benign.}
+
 proc storeAux(dest, src: pointer, n: ptr TNimNode, t: PRawChannel,
               mode: LoadStoreMode) {.benign.} =
   var
     d = cast[ByteAddress](dest)
     s = cast[ByteAddress](src)
   case n.kind
-  of nkSlot: storeAux(cast[pointer](d +% n.offset), 
+  of nkSlot: storeAux(cast[pointer](d +% n.offset),
                       cast[pointer](s +% n.offset), n.typ, t, mode)
   of nkList:
     for i in 0..n.len-1: storeAux(dest, src, n.sons[i], t, mode)
@@ -69,8 +70,11 @@ proc storeAux(dest, src: pointer, n: ptr TNimNode, t: PRawChannel,
     if m != nil: storeAux(dest, src, m, t, mode)
   of nkNone: sysAssert(false, "storeAux")
 
-proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel, 
+proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
               mode: LoadStoreMode) =
+  template `+!`(p: pointer; x: int): pointer =
+    cast[pointer](cast[int](p) +% x)
+
   var
     d = cast[ByteAddress](dest)
     s = cast[ByteAddress](src)
@@ -80,7 +84,7 @@ proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
     if mode == mStore:
       var x = cast[PPointer](dest)
       var s2 = cast[PPointer](s)[]
-      if s2 == nil: 
+      if s2 == nil:
         x[] = nil
       else:
         var ss = cast[NimString](s2)
@@ -93,7 +97,9 @@ proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
       if s2 == nil:
         unsureAsgnRef(x, s2)
       else:
-        unsureAsgnRef(x, copyString(cast[NimString](s2)))
+        let y = copyDeepString(cast[NimString](s2))
+        #echo "loaded ", cast[int](y), " ", cast[string](y)
+        unsureAsgnRef(x, y)
         dealloc(t.region, s2)
   of tySequence:
     var s2 = cast[PPointer](src)[]
@@ -107,27 +113,27 @@ proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
     else:
       sysAssert(dest != nil, "dest == nil")
       if mode == mStore:
-        x[] = alloc(t.region, seq.len *% mt.base.size +% GenericSeqSize)
+        x[] = alloc0(t.region, seq.len *% mt.base.size +% GenericSeqSize)
       else:
         unsureAsgnRef(x, newObj(mt, seq.len * mt.base.size + GenericSeqSize))
       var dst = cast[ByteAddress](cast[PPointer](dest)[])
+      var dstseq = cast[PGenericSeq](dst)
+      dstseq.len = seq.len
+      dstseq.reserved = seq.len
       for i in 0..seq.len-1:
         storeAux(
           cast[pointer](dst +% i*% mt.base.size +% GenericSeqSize),
           cast[pointer](cast[ByteAddress](s2) +% i *% mt.base.size +%
                         GenericSeqSize),
           mt.base, t, mode)
-      var dstseq = cast[PGenericSeq](dst)
-      dstseq.len = seq.len
-      dstseq.reserved = seq.len
       if mode != mStore: dealloc(t.region, s2)
   of tyObject:
-    # copy type field:
-    var pint = cast[ptr PNimType](dest)
-    # XXX use dynamic type here!
-    pint[] = mt
     if mt.base != nil:
       storeAux(dest, src, mt.base, t, mode)
+    else:
+      # copy type field:
+      var pint = cast[ptr PNimType](dest)
+      pint[] = cast[ptr PNimType](src)[]
     storeAux(dest, src, mt.node, t, mode)
   of tyTuple:
     storeAux(dest, src, mt.node, t, mode)
@@ -144,16 +150,24 @@ proc storeAux(dest, src: pointer, mt: PNimType, t: PRawChannel,
       else:
         unsureAsgnRef(x, nil)
     else:
+      #let size = if mt.base.kind == tyObject: cast[ptr PNimType](s)[].size
+      #           else: mt.base.size
       if mode == mStore:
-        x[] = alloc(t.region, mt.base.size)
+        let dyntype = when declared(usrToCell): usrToCell(s).typ
+                      else: mt
+        let size = dyntype.base.size
+        # we store the real dynamic 'ref type' at offset 0, so that
+        # no information is lost
+        let a = alloc0(t.region, size+sizeof(pointer))
+        x[] = a
+        cast[PPointer](a)[] = dyntype
+        storeAux(a +! sizeof(pointer), s, dyntype.base, t, mode)
       else:
-        # XXX we should use the dynamic type here too, but that is not stored
-        # in the inbox at all --> use source[]'s object type? but how? we need
-        # a tyRef to the object!
-        var obj = newObj(mt, mt.base.size)
+        let dyntype = cast[ptr PNimType](s)[]
+        var obj = newObj(dyntype, dyntype.base.size)
         unsureAsgnRef(x, obj)
-      storeAux(x[], s, mt.base, t, mode)
-      if mode != mStore: dealloc(t.region, s)
+        storeAux(x[], s +! sizeof(pointer), dyntype.base, t, mode)
+        dealloc(t.region, s)
   else:
     copyMem(dest, src, mt.size) # copy raw bits
 
@@ -192,14 +206,12 @@ template lockChannel(q: expr, action: stmt) {.immediate.} =
   action
   releaseSys(q.lock)
 
-template sendImpl(q: expr) {.immediate.} =  
+template sendImpl(q: expr) {.immediate.} =
   if q.mask == ChannelDeadMask:
     sysFatal(DeadThreadError, "cannot send message; thread died")
   acquireSys(q.lock)
-  var m: TMsg
-  shallowCopy(m, msg)
   var typ = cast[PNimType](getTypeInfo(msg))
-  rawSend(q, addr(m), typ)
+  rawSend(q, unsafeAddr(msg), typ)
   q.elemType = typ
   releaseSys(q.lock)
   signalSysCond(q.cond)
@@ -230,8 +242,10 @@ proc recv*[TMsg](c: var Channel[TMsg]): TMsg =
 
 proc tryRecv*[TMsg](c: var Channel[TMsg]): tuple[dataAvailable: bool,
                                                   msg: TMsg] =
-  ## try to receives a message from the channel `c` if available. Otherwise
-  ## it returns ``(false, default(msg))``.
+  ## Tries to receive a message from the channel `c`, but this can fail
+  ## for all sort of reasons, including contention. If it fails,
+  ## it returns ``(false, default(msg))`` otherwise it
+  ## returns ``(true, msg)``.
   var q = cast[PRawChannel](addr(c))
   if q.mask != ChannelDeadMask:
     if tryAcquireSys(q.lock):

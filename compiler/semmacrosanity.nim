@@ -12,25 +12,26 @@
 
 import ast, astalgo, msgs, types
 
-proc ithField(n: PNode, field: int): PSym =
+proc ithField(n: PNode, field: var int): PSym =
   result = nil
   case n.kind
   of nkRecList:
     for i in countup(0, sonsLen(n) - 1):
-      result = ithField(n.sons[i], field-i)
+      result = ithField(n.sons[i], field)
       if result != nil: return
   of nkRecCase:
     if n.sons[0].kind != nkSym: internalError(n.info, "ithField")
-    result = ithField(n.sons[0], field-1)
+    result = ithField(n.sons[0], field)
     if result != nil: return
     for i in countup(1, sonsLen(n) - 1):
       case n.sons[i].kind
       of nkOfBranch, nkElse:
-        result = ithField(lastSon(n.sons[i]), field-1)
+        result = ithField(lastSon(n.sons[i]), field)
         if result != nil: return
       else: internalError(n.info, "ithField(record case branch)")
   of nkSym:
     if field == 0: result = n.sym
+    else: dec(field)
   else: discard
 
 proc annotateType*(n: PNode, t: PType) =
@@ -38,14 +39,19 @@ proc annotateType*(n: PNode, t: PType) =
   # Note: x can be unequal to t and we need to be careful to use 't'
   # to not to skip tyGenericInst
   case n.kind
+  of nkObjConstr:
+    let x = t.skipTypes(abstractPtrs)
+    n.typ = t
+    for i in 1 .. <n.len:
+      var j = i-1
+      let field = x.n.ithField(j)
+      if field.isNil:
+        globalError n.info, "invalid field at index " & $i
+      else:
+        internalAssert(n.sons[i].kind == nkExprColonExpr)
+        annotateType(n.sons[i].sons[1], field.typ)
   of nkPar:
-    if x.kind == tyObject:
-      n.typ = t
-      for i in 0 .. <n.len:
-        let field = x.n.ithField(i)
-        if field.isNil: globalError n.info, "invalid field at index " & $i
-        else: annotateType(n.sons[i], field.typ)
-    elif x.kind == tyTuple:
+    if x.kind == tyTuple:
       n.typ = t
       for i in 0 .. <n.len:
         if i >= x.len: globalError n.info, "invalid field at index " & $i
@@ -53,9 +59,9 @@ proc annotateType*(n: PNode, t: PType) =
     elif x.kind == tyProc and x.callConv == ccClosure:
       n.typ = t
     else:
-      globalError(n.info, "() must have an object or tuple type")
+      globalError(n.info, "() must have a tuple type")
   of nkBracket:
-    if x.kind in {tyArrayConstr, tyArray, tySequence, tyOpenArray}:
+    if x.kind in {tyArray, tySequence, tyOpenArray}:
       n.typ = t
       for m in n: annotateType(m, x.elemType)
     else:

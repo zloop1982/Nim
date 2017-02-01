@@ -3,7 +3,7 @@
 # the standard deviation of its columns.
 # The CSV file can have a header which is then used for the output.
 
-import os, streams, parsecsv, strutils, math
+import os, streams, parsecsv, strutils, math, stats
 
 if paramCount() < 1:
   quit("Usage: statcsv filename[.csv]")
@@ -28,7 +28,7 @@ while readRow(x):
       for i in 0..x.row.len-1: header[i] = "Col " & $(i+1)
   else:
     # data line:
-    for i in 0..x.row.len-1: 
+    for i in 0..x.row.len-1:
       push(res[i], parseFloat(x.row[i]))
 x.close()
 

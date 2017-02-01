@@ -9,9 +9,12 @@
 
 ## Module for converting an integer to a Roman numeral.
 ## See http://en.wikipedia.org/wiki/Roman_numerals for reference.
+##
+## **Warning:** This module will be moved out of the stdlib and into a
+## Nimble package, don't use it.
 
 const
-  RomanNumeralDigits* = {'I', 'i', 'V', 'v', 'X', 'x', 'L', 'l', 'C', 'c', 
+  RomanNumeralDigits* = {'I', 'i', 'V', 'v', 'X', 'x', 'L', 'l', 'C', 'c',
     'D', 'd', 'M', 'm'} ## set of all characters a Roman numeral may consist of
 
 proc romanToDecimal*(romanVal: string): int =
@@ -28,7 +31,7 @@ proc romanToDecimal*(romanVal: string): int =
     of 'C', 'c': val = 100
     of 'D', 'd': val = 500
     of 'M', 'm': val = 1000
-    else: 
+    else:
       raise newException(EInvalidValue, "invalid roman numeral: " & $romanVal)
     if val >= prevVal:
       inc(result, val)

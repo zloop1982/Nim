@@ -9,7 +9,7 @@
 
 ## Implements Nim's 'spawn'.
 
-when not declared(NimString): 
+when not declared(NimString):
   {.error: "You must not import this module explicitly".}
 
 {.push stackTrace:off.}
@@ -138,7 +138,7 @@ proc slave(w: ptr Worker) {.thread.} =
 const NumThreads = 4
 
 var
-  workers: array[NumThreads, TThread[ptr Worker]]
+  workers: array[NumThreads, Thread[ptr Worker]]
   workersData: array[NumThreads, Worker]
 
 proc setup() =

@@ -74,8 +74,6 @@ type
     currentSpawnId: int
     inLoop: int
 
-let opSlice = createMagic("slice", mSlice)
-
 proc initAnalysisCtx(): AnalysisCtx =
   result.locals = @[]
   result.slices = @[]
@@ -123,15 +121,15 @@ proc checkLocal(c: AnalysisCtx; n: PNode) =
   else:
     for i in 0 .. <n.safeLen: checkLocal(c, n.sons[i])
 
-template `?`(x): expr = x.renderTree
+template `?`(x): untyped = x.renderTree
 
 proc checkLe(c: AnalysisCtx; a, b: PNode) =
   case proveLe(c.guards, a, b)
   of impUnknown:
-    localError(a.info, "cannot prove: " & ?a & " <= " & ?b)
+    localError(a.info, "cannot prove: " & ?a & " <= " & ?b & " (bounds check)")
   of impYes: discard
   of impNo:
-    localError(a.info, "can prove: " & ?a & " > " & ?b)
+    localError(a.info, "can prove: " & ?a & " > " & ?b & " (bounds check)")
 
 proc checkBounds(c: AnalysisCtx; arr, idx: PNode) =
   checkLe(c, arr.lowBound, idx)
@@ -156,19 +154,23 @@ proc addSlice(c: var AnalysisCtx; n: PNode; x, le, ri: PNode) =
 
 proc overlap(m: TModel; x,y,c,d: PNode) =
   #  X..Y and C..D overlap iff (X <= D and C <= Y)
-  case proveLe(m, x, d)
+  case proveLe(m, c, y)
   of impUnknown:
-    localError(x.info,
-      "cannot prove: $# > $#; required for ($#)..($#) disjoint from ($#)..($#)" %
-        [?x, ?d, ?x, ?y, ?c, ?d])
+    case proveLe(m, x, d)
+    of impNo: discard
+    of impUnknown, impYes:
+      localError(x.info,
+        "cannot prove: $# > $#; required for ($#)..($#) disjoint from ($#)..($#)" %
+            [?c, ?y, ?x, ?y, ?c, ?d])
   of impYes:
-    case proveLe(m, c, y)
+    case proveLe(m, x, d)
     of impUnknown:
       localError(x.info,
         "cannot prove: $# > $#; required for ($#)..($#) disjoint from ($#)..($#)" %
-          [?c, ?y, ?x, ?y, ?c, ?d])
+          [?x, ?d, ?x, ?y, ?c, ?d])
     of impYes:
-      localError(x.info, "($#)..($#) not disjoint from ($#)..($#)" % [?x, ?y, ?c, ?d])
+      localError(x.info, "($#)..($#) not disjoint from ($#)..($#)" %
+                [?c, ?y, ?x, ?y, ?c, ?d])
     of impNo: discard
   of impNo: discard
 
@@ -258,7 +260,7 @@ proc min(a, b: PNode): PNode =
 
 proc fromSystem(op: PSym): bool = sfSystemModule in getModule(op).flags
 
-template pushSpawnId(c: expr, body: stmt) {.immediate, dirty.} =
+template pushSpawnId(c, body) {.dirty.} =
   inc c.spawns
   let oldSpawnId = c.currentSpawnId
   c.currentSpawnId = c.spawns
@@ -278,10 +280,12 @@ proc analyseCall(c: var AnalysisCtx; n: PNode; op: PSym) =
         slot.stride = min(slot.stride, incr)
     analyseSons(c, n)
   elif op.name.s == "[]" and op.fromSystem:
-    c.addSlice(n, n[1], n[2][1], n[2][2])
+    let slice = n[2].skipStmtList
+    c.addSlice(n, n[1], slice[1], slice[2])
     analyseSons(c, n)
   elif op.name.s == "[]=" and op.fromSystem:
-    c.addSlice(n, n[1], n[2][1], n[2][2])
+    let slice = n[2].skipStmtList
+    c.addSlice(n, n[1], slice[1], slice[2])
     analyseSons(c, n)
   else:
     analyseSons(c, n)
@@ -363,7 +367,7 @@ proc analyse(c: var AnalysisCtx; n: PNode) =
             else: internalError(it.info, "slot already has a lower bound")
         if not isSpawned: analyse(c, value)
   of nkCaseStmt: analyseCase(c, n)
-  of nkIfStmt, nkIfExpr: analyseIf(c, n)
+  of nkWhen, nkIfStmt, nkIfExpr: analyseIf(c, n)
   of nkWhileStmt:
     analyse(c, n.sons[0])
     # 'while true' loop?
@@ -393,10 +397,13 @@ proc transformSlices(n: PNode): PNode =
     let op = n[0].sym
     if op.name.s == "[]" and op.fromSystem:
       result = copyNode(n)
-      result.add opSlice.newSymNode
+      let opSlice = newSymNode(createMagic("slice", mSlice))
+      opSlice.typ = getSysType(tyInt)
+      result.add opSlice
       result.add n[1]
-      result.add n[2][1]
-      result.add n[2][2]
+      let slice = n[2].skipStmtList
+      result.add slice[1]
+      result.add slice[2]
       return result
   if n.safeLen > 0:
     result = shallowCopy(n)

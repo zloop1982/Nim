@@ -14,7 +14,7 @@ type
   Url* = distinct string
 
   Uri* = object
-    scheme*, username*, password*: string 
+    scheme*, username*, password*: string
     hostname*, port*, path*, query*, anchor*: string
     opaque*: bool
 
@@ -69,7 +69,7 @@ proc parseAuthority(authority: string, result: var Uri) =
     i.inc
 
 proc parsePath(uri: string, i: var int, result: var Uri) =
-  
+
   i.inc parseUntil(uri, result.path, {'?', '#'}, i)
 
   # The 'mailto' scheme's PATH actually contains the hostname/username
@@ -104,19 +104,23 @@ proc parseUri*(uri: string, result: var Uri) =
   var i = 0
 
   # Check if this is a reference URI (relative URI)
+  let doubleSlash = uri.len > 1 and uri[1] == '/'
   if uri[i] == '/':
-    parsePath(uri, i, result)
-    return
+    # Make sure ``uri`` doesn't begin with '//'.
+    if not doubleSlash:
+      parsePath(uri, i, result)
+      return
 
   # Scheme
   i.inc parseWhile(uri, result.scheme, Letters + Digits + {'+', '-', '.'}, i)
-  if uri[i] != ':':
+  if uri[i] != ':' and not doubleSlash:
     # Assume this is a reference URI (relative URI)
     i = 0
     result.scheme.setLen(0)
     parsePath(uri, i, result)
     return
-  i.inc # Skip ':'
+  if not doubleSlash:
+    i.inc # Skip ':'
 
   # Authority
   if uri[i] == '/' and uri[i+1] == '/':
@@ -138,6 +142,7 @@ proc parseUri*(uri: string): Uri =
   parseUri(uri, result)
 
 proc removeDotSegments(path: string): string =
+  if path.len == 0: return ""
   var collection: seq[string] = @[]
   let endsWithSlash = path[path.len-1] == '/'
   var i = 0
@@ -201,7 +206,7 @@ proc combine*(base: Uri, reference: Uri): Uri =
   ##
   ##   let bar = combine(parseUri("http://example.com/foo/bar/"), parseUri("baz"))
   ##   assert bar.path == "/foo/bar/baz"
-  
+
   template setAuthority(dest, src: expr): stmt =
     dest.hostname = src.hostname
     dest.username = src.username
@@ -240,6 +245,10 @@ proc combine*(uris: varargs[Uri]): Uri =
   for i in 1 .. <uris.len:
     result = combine(result, uris[i])
 
+proc isAbsolute*(uri: Uri): bool =
+  ## returns true if URI is absolute, false otherwise
+  return uri.scheme != "" and (uri.hostname != "" or uri.path != "")
+
 proc `/`*(x: Uri, path: string): Uri =
   ## Concatenates the path specified to the specified URI's path.
   ##
@@ -250,15 +259,20 @@ proc `/`*(x: Uri, path: string): Uri =
   ## Examples:
   ##
   ## .. code-block::
-  ##   let foo = parseUri("http://example.com/foo/bar") / parseUri("/baz")
+  ##   let foo = parseUri("http://example.com/foo/bar") / "/baz"
   ##   assert foo.path == "/foo/bar/baz"
   ##
-  ##   let bar = parseUri("http://example.com/foo/bar") / parseUri("baz")
+  ##   let bar = parseUri("http://example.com/foo/bar") / "baz"
   ##   assert bar.path == "/foo/bar/baz"
   ##
-  ##   let bar = parseUri("http://example.com/foo/bar/") / parseUri("baz")
+  ##   let bar = parseUri("http://example.com/foo/bar/") / "baz"
   ##   assert bar.path == "/foo/bar/baz"
   result = x
+
+  if result.path.len == 0:
+    result.path = path
+    return
+
   if result.path[result.path.len-1] == '/':
     if path[0] == '/':
       result.path.add(path[1 .. path.len-1])
@@ -369,6 +383,15 @@ when isMainModule:
     doAssert test.path == "test/no/slash"
     doAssert($test == str)
 
+  block:
+    let str = "//git@github.com:dom96/packages"
+    let test = parseUri(str)
+    doAssert test.scheme == ""
+    doAssert test.username == "git"
+    doAssert test.hostname == "github.com"
+    doAssert test.port == "dom96"
+    doAssert test.path == "/packages"
+
   # Remove dot segments tests
   block:
     doAssert removeDotSegments("/foo/bar/baz") == "/foo/bar/baz"
@@ -419,3 +442,58 @@ when isMainModule:
   block:
     let test = parseUri("http://example.com/foo/") / "/bar/asd"
     doAssert test.path == "/foo/bar/asd"
+
+  # removeDotSegments tests
+  block:
+    # empty test
+    doAssert removeDotSegments("") == ""
+
+  # bug #3207
+  block:
+    doAssert parseUri("http://qq/1").combine(parseUri("https://qqq")).`$` == "https://qqq"
+
+  # bug #4959
+  block:
+    let foo = parseUri("http://example.com") / "/baz"
+    doAssert foo.path == "/baz"
+
+  # isAbsolute tests
+  block:
+    doAssert "www.google.com".parseUri().isAbsolute() == false
+    doAssert "http://www.google.com".parseUri().isAbsolute() == true
+    doAssert "file:/dir/file".parseUri().isAbsolute() == true
+    doAssert "file://localhost/dir/file".parseUri().isAbsolute() == true
+    doAssert "urn:ISSN:1535-3613".parseUri().isAbsolute() == true
+
+    # path-relative URL *relative
+    doAssert "about".parseUri().isAbsolute == false
+    doAssert "about/staff.html".parseUri().isAbsolute == false
+    doAssert "about/staff.html?".parseUri().isAbsolute == false
+    doAssert "about/staff.html?parameters".parseUri().isAbsolute == false
+
+    # absolute-path-relative URL *relative
+    doAssert "/".parseUri().isAbsolute == false
+    doAssert "/about".parseUri().isAbsolute == false
+    doAssert "/about/staff.html".parseUri().isAbsolute == false
+    doAssert "/about/staff.html?".parseUri().isAbsolute == false
+    doAssert "/about/staff.html?parameters".parseUri().isAbsolute == false
+
+    # scheme-relative URL *relative
+    doAssert "//username:password@example.com:8888".parseUri().isAbsolute == false
+    doAssert "//username@example.com".parseUri().isAbsolute == false
+    doAssert "//example.com".parseUri().isAbsolute == false
+    doAssert "//example.com/".parseUri().isAbsolute == false
+    doAssert "//example.com/about".parseUri().isAbsolute == false
+    doAssert "//example.com/about/staff.html".parseUri().isAbsolute == false
+    doAssert "//example.com/about/staff.html?".parseUri().isAbsolute == false
+    doAssert "//example.com/about/staff.html?parameters".parseUri().isAbsolute == false
+
+    # absolute URL *absolute
+    doAssert "https://username:password@example.com:8888".parseUri().isAbsolute == true
+    doAssert "https://username@example.com".parseUri().isAbsolute == true
+    doAssert "https://example.com".parseUri().isAbsolute == true
+    doAssert "https://example.com/".parseUri().isAbsolute == true
+    doAssert "https://example.com/about".parseUri().isAbsolute == true
+    doAssert "https://example.com/about/staff.html".parseUri().isAbsolute == true
+    doAssert "https://example.com/about/staff.html?".parseUri().isAbsolute == true
+    doAssert "https://example.com/about/staff.html?parameters".parseUri().isAbsolute == true

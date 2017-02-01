@@ -10,6 +10,9 @@
 ## This module allows you to monitor files or directories for changes using
 ## asyncio.
 ##
+## **Warning**: This module will likely disappear soon and be moved into a
+## new Nimble package.
+##
 ## Windows support is not yet implemented.
 ##
 ## **Note:** This module uses ``inotify`` on Linux (Other Unixes are not yet
@@ -30,12 +33,12 @@ type
     fd: cint
     handleEvent: proc (m: FSMonitor, ev: MonitorEvent) {.closure.}
     targets: Table[cint, string]
-  
+
   MonitorEventType* = enum ## Monitor event type
     MonitorAccess,       ## File was accessed.
     MonitorAttrib,       ## Metadata changed.
-    MonitorCloseWrite,   ## Writtable file was closed.
-    MonitorCloseNoWrite, ## Unwrittable file closed.
+    MonitorCloseWrite,   ## Writable file was closed.
+    MonitorCloseNoWrite, ## Non-writable file closed.
     MonitorCreate,       ## Subfile was created.
     MonitorDelete,       ## Subfile was deleted.
     MonitorDeleteSelf,   ## Watched file/directory was itself deleted.
@@ -44,7 +47,7 @@ type
     MonitorMoved,        ## File was moved.
     MonitorOpen,         ## File was opened.
     MonitorAll           ## Filter for all event types.
-  
+
   MonitorEvent* = object
     case kind*: MonitorEventType  ## Type of the event.
     of MonitorMoveSelf, MonitorMoved:
@@ -77,23 +80,23 @@ proc add*(monitor: FSMonitor, target: string,
   ## Adds ``target`` which may be a directory or a file to the list of
   ## watched paths of ``monitor``.
   ## You can specify the events to report using the ``filters`` parameter.
-  
-  var INFilter = -1
+
+  var INFilter = 0
   for f in filters:
     case f
-    of MonitorAccess: INFilter = INFilter and IN_ACCESS
-    of MonitorAttrib: INFilter = INFilter and IN_ATTRIB
-    of MonitorCloseWrite: INFilter = INFilter and IN_CLOSE_WRITE
-    of MonitorCloseNoWrite: INFilter = INFilter and IN_CLOSE_NO_WRITE
-    of MonitorCreate: INFilter = INFilter and IN_CREATE
-    of MonitorDelete: INFilter = INFilter and IN_DELETE
-    of MonitorDeleteSelf: INFilter = INFilter and IN_DELETE_SELF
-    of MonitorModify: INFilter = INFilter and IN_MODIFY
-    of MonitorMoveSelf: INFilter = INFilter and IN_MOVE_SELF
-    of MonitorMoved: INFilter = INFilter and IN_MOVED_FROM and IN_MOVED_TO
-    of MonitorOpen: INFilter = INFilter and IN_OPEN
-    of MonitorAll: INFilter = INFilter and IN_ALL_EVENTS
-  
+    of MonitorAccess: INFilter = INFilter or IN_ACCESS
+    of MonitorAttrib: INFilter = INFilter or IN_ATTRIB
+    of MonitorCloseWrite: INFilter = INFilter or IN_CLOSE_WRITE
+    of MonitorCloseNoWrite: INFilter = INFilter or IN_CLOSE_NO_WRITE
+    of MonitorCreate: INFilter = INFilter or IN_CREATE
+    of MonitorDelete: INFilter = INFilter or IN_DELETE
+    of MonitorDeleteSelf: INFilter = INFilter or IN_DELETE_SELF
+    of MonitorModify: INFilter = INFilter or IN_MODIFY
+    of MonitorMoveSelf: INFilter = INFilter or IN_MOVE_SELF
+    of MonitorMoved: INFilter = INFilter or IN_MOVED_FROM or IN_MOVED_TO
+    of MonitorOpen: INFilter = INFilter or IN_OPEN
+    of MonitorAll: INFilter = INFilter or IN_ALL_EVENTS
+
   result = inotifyAddWatch(monitor.fd, target, INFilter.uint32)
   if result < 0:
     raiseOSError(osLastError())
@@ -125,13 +128,13 @@ proc getEvent(m: FSMonitor, fd: cint): seq[MonitorEvent] =
       mev.name = $cstr
     else:
       mev.name = ""
-    
-    if (event.mask.int and IN_MOVED_FROM) != 0: 
+
+    if (event.mask.int and IN_MOVED_FROM) != 0:
       # Moved from event, add to m's collection
       movedFrom.add(event.cookie.cint, (mev.wd, mev.name))
       inc(i, sizeof(INotifyEvent) + event.len.int)
       continue
-    elif (event.mask.int and IN_MOVED_TO) != 0: 
+    elif (event.mask.int and IN_MOVED_TO) != 0:
       mev.kind = MonitorMoved
       assert movedFrom.hasKey(event.cookie.cint)
       # Find the MovedFrom event.
@@ -141,23 +144,23 @@ proc getEvent(m: FSMonitor, fd: cint): seq[MonitorEvent] =
       movedFrom.del(event.cookie.cint)
     elif (event.mask.int and IN_ACCESS) != 0: mev.kind = MonitorAccess
     elif (event.mask.int and IN_ATTRIB) != 0: mev.kind = MonitorAttrib
-    elif (event.mask.int and IN_CLOSE_WRITE) != 0: 
+    elif (event.mask.int and IN_CLOSE_WRITE) != 0:
       mev.kind = MonitorCloseWrite
-    elif (event.mask.int and IN_CLOSE_NOWRITE) != 0: 
+    elif (event.mask.int and IN_CLOSE_NOWRITE) != 0:
       mev.kind = MonitorCloseNoWrite
     elif (event.mask.int and IN_CREATE) != 0: mev.kind = MonitorCreate
-    elif (event.mask.int and IN_DELETE) != 0: 
+    elif (event.mask.int and IN_DELETE) != 0:
       mev.kind = MonitorDelete
-    elif (event.mask.int and IN_DELETE_SELF) != 0: 
+    elif (event.mask.int and IN_DELETE_SELF) != 0:
       mev.kind = MonitorDeleteSelf
     elif (event.mask.int and IN_MODIFY) != 0: mev.kind = MonitorModify
-    elif (event.mask.int and IN_MOVE_SELF) != 0: 
+    elif (event.mask.int and IN_MOVE_SELF) != 0:
       mev.kind = MonitorMoveSelf
     elif (event.mask.int and IN_OPEN) != 0: mev.kind = MonitorOpen
-    
+
     if mev.kind != MonitorMoved:
       mev.fullname = ""
-    
+
     result.add(mev)
     inc(i, sizeof(INotifyEvent) + event.len.int)
 
@@ -200,9 +203,18 @@ proc register*(d: Dispatcher, monitor: FSMonitor,
 
 when not defined(testing) and isMainModule:
   proc main =
-    var disp = newDispatcher()
-    var monitor = newMonitor()
-    echo monitor.add("/home/dom/inotifytests/")
+    var
+      disp = newDispatcher()
+      monitor = newMonitor()
+      n = 0
+    n = monitor.add("/tmp")
+    assert n == 1
+    n = monitor.add("/tmp", {MonitorAll})
+    assert n == 1
+    n = monitor.add("/tmp", {MonitorCloseWrite, MonitorCloseNoWrite})
+    assert n == 1
+    n = monitor.add("/tmp", {MonitorMoved, MonitorOpen, MonitorAccess})
+    assert n == 1
     disp.register(monitor,
       proc (m: FSMonitor, ev: MonitorEvent) =
         echo("Got event: ", ev.kind)
@@ -211,7 +223,7 @@ when not defined(testing) and isMainModule:
           echo("Name is ", ev.name)
         else:
           echo("Name ", ev.name, " fullname ", ev.fullName))
-        
+
     while true:
       if not disp.poll(): break
   main()

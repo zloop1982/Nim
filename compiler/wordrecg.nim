@@ -13,8 +13,7 @@
 # does not support strings. Without this the code would
 # be slow and unreadable.
 
-import
-  hashes, strutils, idents
+from strutils import cmpIgnoreStyle
 
 # Keywords must be kept sorted and within a range
 
@@ -35,17 +34,18 @@ type
 
     wColon, wColonColon, wEquals, wDot, wDotDot,
     wStar, wMinus,
-    wMagic, wThread, wFinal, wProfiler, wObjChecks,
+    wMagic, wThread, wFinal, wProfiler, wMemTracker, wObjChecks,
+    wIntDefine, wStrDefine,
 
     wDestroy,
 
     wImmediate, wConstructor, wDestructor, wDelegator, wOverride,
     wImportCpp, wImportObjC,
     wImportCompilerProc,
-    wImportc, wExportc, wIncompleteStruct, wRequiresInit,
+    wImportc, wExportc, wExportNims, wIncompleteStruct, wRequiresInit,
     wAlign, wNodecl, wPure, wSideeffect, wHeader,
     wNosideeffect, wGcSafe, wNoreturn, wMerge, wLib, wDynlib,
-    wCompilerproc, wProcVar,
+    wCompilerproc, wProcVar, wBase,
     wFatal, wError, wWarning, wHint, wLine, wPush, wPop, wDefine, wUndef,
     wLinedir, wStacktrace, wLinetrace, wLink, wCompile,
     wLinksys, wDeprecated, wVarargs, wCallconv, wBreakpoint, wDebugger,
@@ -66,6 +66,7 @@ type
     wWrite, wGensym, wInject, wDirty, wInheritable, wThreadVar, wEmit,
     wAsmNoStackFrame,
     wImplicitStatic, wGlobal, wCodegenDecl, wUnchecked, wGuard, wLocks,
+    wPartial,
 
     wAuto, wBool, wCatch, wChar, wClass,
     wConst_cast, wDefault, wDelete, wDouble, wDynamic_cast,
@@ -82,6 +83,7 @@ type
     wStdIn, wStdOut, wStdErr,
 
     wInOut, wByCopy, wByRef, wOneWay,
+    wBitsize,
 
   TSpecialWords* = set[TSpecialWord]
 
@@ -119,16 +121,18 @@ const
 
     ":", "::", "=", ".", "..",
     "*", "-",
-    "magic", "thread", "final", "profiler", "objchecks",
+    "magic", "thread", "final", "profiler", "memtracker", "objchecks", "intdefine", "strdefine",
 
     "destroy",
 
     "immediate", "constructor", "destructor", "delegator", "override",
     "importcpp", "importobjc",
-    "importcompilerproc", "importc", "exportc", "incompletestruct",
+    "importcompilerproc", "importc", "exportc", "exportnims",
+    "incompletestruct",
     "requiresinit", "align", "nodecl", "pure", "sideeffect",
     "header", "nosideeffect", "gcsafe", "noreturn", "merge", "lib", "dynlib",
-    "compilerproc", "procvar", "fatal", "error", "warning", "hint", "line",
+    "compilerproc", "procvar", "base",
+    "fatal", "error", "warning", "hint", "line",
     "push", "pop", "define", "undef", "linedir", "stacktrace", "linetrace",
     "link", "compile", "linksys", "deprecated", "varargs",
     "callconv", "breakpoint", "debugger", "nimcall", "stdcall",
@@ -148,7 +152,7 @@ const
     "computedgoto", "injectstmt", "experimental",
     "write", "gensym", "inject", "dirty", "inheritable", "threadvar", "emit",
     "asmnostackframe", "implicitstatic", "global", "codegendecl", "unchecked",
-    "guard", "locks",
+    "guard", "locks", "partial",
 
     "auto", "bool", "catch", "char", "class",
     "const_cast", "default", "delete", "double",
@@ -167,6 +171,7 @@ const
     "stdin", "stdout", "stderr",
 
     "inout", "bycopy", "byref", "oneway",
+    "bitsize",
     ]
 
 proc findStr*(a: openArray[string], s: string): int =
@@ -174,17 +179,3 @@ proc findStr*(a: openArray[string], s: string): int =
     if cmpIgnoreStyle(a[i], s) == 0:
       return i
   result = - 1
-
-proc whichKeyword*(id: PIdent): TSpecialWord =
-  if id.id < 0: result = wInvalid
-  else: result = TSpecialWord(id.id)
-
-proc whichKeyword*(id: string): TSpecialWord =
-  result = whichKeyword(getIdent(id))
-
-proc initSpecials() =
-  # initialize the keywords:
-  for s in countup(succ(low(specialWords)), high(specialWords)):
-    getIdent(specialWords[s], hashIgnoreStyle(specialWords[s])).id = ord(s)
-
-initSpecials()

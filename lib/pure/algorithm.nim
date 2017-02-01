@@ -48,8 +48,9 @@ proc reverse*[T](a: var openArray[T]) =
   ## reverses the array `a`.
   reverse(a, 0, a.high)
 
-proc reversed*[T](a: openArray[T], first, last: Natural): seq[T] =
+proc reversed*[T](a: openArray[T], first: Natural, last: int): seq[T] =
   ## returns the reverse of the array `a[first..last]`.
+  assert last >= first-1
   var i = last - first
   var x = first.int
   result = newSeq[T](i + 1)
@@ -113,7 +114,7 @@ proc lowerBound*[T](a: openArray[T], key: T, cmp: proc(x,y: T): int {.closure.})
 proc lowerBound*[T](a: openArray[T], key: T): int = lowerBound(a, key, cmp[T])
 proc merge[T](a, b: var openArray[T], lo, m, hi: int,
               cmp: proc (x, y: T): int {.closure.}, order: SortOrder) =
-  template `<-` (a, b: expr) =
+  template `<-` (a, b) =
     when false:
       a = b
     elif onlySafeCode:
@@ -178,7 +179,7 @@ proc sort*[T](a: var openArray[T],
   ##    sort(myStrArray, system.cmp)
   ##
   ## You can inline adhoc comparison procs with the `do notation
-  ## <manual.html#do-notation>`_. Example:
+  ## <manual.html#procedures-do-notation>`_. Example:
   ##
   ## .. code-block:: nim
   ##
@@ -205,7 +206,7 @@ proc sorted*[T](a: openArray[T], cmp: proc(x, y: T): int {.closure.},
     result[i] = a[i]
   sort(result, cmp, order)
 
-template sortedByIt*(seq1, op: expr): expr =
+template sortedByIt*(seq1, op: untyped): untyped =
   ## Convenience template around the ``sorted`` proc to reduce typing.
   ##
   ## The template injects the ``it`` variable which you can use directly in an
@@ -230,7 +231,7 @@ template sortedByIt*(seq1, op: expr): expr =
   ##
   ##   echo people.sortedByIt((it.age, it.name))
   ##
-  var result {.gensym.} = sorted(seq1, proc(x, y: type(seq1[0])): int =
+  var result = sorted(seq1, proc(x, y: type(seq1[0])): int =
     var it {.inject.} = x
     let a = op
     it = y

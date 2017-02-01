@@ -3,20 +3,20 @@ discard """
 """
 
 type
-  TThreadFuncArgs[T] = object of TObject
+  ThreadFuncArgs[T] = object of RootObj
     a: proc(): T {.thread.}
     b: proc(val: T) {.thread.}
 
-proc handleThreadFunc(arg: TThreadFuncArgs[int]){.thread.} =
+proc handleThreadFunc(arg: ThreadFuncArgs[int]){.thread.} =
   var fn = arg.a
   var callback = arg.b
   var output = fn()
   callback(output)
 
-proc `@||->`*[T](fn: proc(): T {.thread.}, 
-                 callback: proc(val: T){.thread.}): TThread[TThreadFuncArgs[T]] =
-  var thr: TThread[TThreadFuncArgs[T]]
-  var args: TThreadFuncArgs[T]
+proc `@||->`*[T](fn: proc(): T {.thread.},
+                 callback: proc(val: T){.thread.}): Thread[ThreadFuncArgs[T]] =
+  var thr: Thread[ThreadFuncArgs[T]]
+  var args: ThreadFuncArgs[T]
   args.a = fn
   args.b = callback
   createThread(thr, handleThreadFunc, args)
@@ -31,7 +31,7 @@ when isMainModule:
     return 1
   proc callbackFunc(val: int) {.thread.} =
     echo($(val))
-   
+
   var thr = (testFunc @||-> callbackFunc)
   echo("test")
   joinThread(thr)

@@ -1,7 +1,7 @@
 #
 #
 #           The Nim Compiler
-#        (c) Copyright 2012 Andreas Rumpf
+#        (c) Copyright 2017 Andreas Rumpf
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
@@ -13,7 +13,8 @@ import
   strutils, lists, intsets, options, lexer, ast, astalgo, trees, treetab,
   wordrecg,
   ropes, msgs, platform, os, condsyms, idents, renderer, types, extccomp, math,
-  magicsys, nversion, nimsets, parser, times, passes, rodread, vmdef
+  magicsys, nversion, nimsets, parser, times, passes, rodread, vmdef,
+  modulegraphs
 
 type
   TOptionEntry* = object of lists.TListEntry # entries to put on a
@@ -30,6 +31,7 @@ type
                               # statements
     owner*: PSym              # the symbol this context belongs to
     resultSym*: PSym          # the result symbol (if we are in a proc)
+    selfSym*: PSym            # the 'self' symbol (if available)
     nestedLoopCounter*: int   # whether we are in a loop or not
     nestedBlockCounter*: int  # whether we are in a block or not
     inTryStmt*: int           # whether we are in a try statement; works also
@@ -45,7 +47,8 @@ type
   TExprFlag* = enum
     efLValue, efWantIterator, efInTypeof,
     efWantStmt, efAllowStmt, efDetermineType,
-    efAllowDestructor, efWantValue, efOperand, efNoSemCheck
+    efAllowDestructor, efWantValue, efOperand, efNoSemCheck,
+    efNoProcvarCheck, efNoEvaluateGeneric, efInCall, efFromHlo
   TExprFlags* = set[TExprFlag]
 
   TTypeAttachedOp* = enum
@@ -70,7 +73,8 @@ type
     inTypeClass*: int          # > 0 if we are in a user-defined type class
     inGenericContext*: int     # > 0 if we are in a generic type
     inUnrolledContext*: int    # > 0 if we are unrolling a loop
-    inCompilesContext*: int    # > 0 if we are in a ``compiles`` magic
+    compilesContextId*: int    # > 0 if we are in a ``compiles`` magic
+    compilesContextIdGenerator*: int
     inGenericInst*: int        # > 0 if we are instantiating a generic
     converters*: TSymSeq       # sequence of converters
     patterns*: TSymSeq         # sequence of pattern matchers
@@ -96,12 +100,17 @@ type
     unknownIdents*: IntSet     # ids of all unknown identifiers to prevent
                                # naming it multiple times
     generics*: seq[TInstantiationPair] # pending list of instantiated generics to compile
+    topStmts*: int # counts the number of encountered top level statements
     lastGenericIdx*: int      # used for the generics stack
     hloLoopDetector*: int     # used to prevent endless loops in the HLO
     inParallelStmt*: int
     instTypeBoundOp*: proc (c: PContext; dc: PSym; t: PType; info: TLineInfo;
-                            op: TTypeAttachedOp): PSym {.nimcall.}
-
+                            op: TTypeAttachedOp; col: int): PSym {.nimcall.}
+    selfName*: PIdent
+    cache*: IdentCache
+    graph*: ModuleGraph
+    signatures*: TStrTable
+    recursiveDep*: string
 
 proc makeInstPair*(s: PSym, inst: PInstantiation): TInstantiationPair =
   result.genericSym = s
@@ -111,29 +120,13 @@ proc filename*(c: PContext): string =
   # the module's filename
   return c.module.filename
 
-proc newContext*(module: PSym): PContext
-
-proc lastOptionEntry*(c: PContext): POptionEntry
-proc newOptionEntry*(): POptionEntry
-proc newLib*(kind: TLibKind): PLib
-proc addToLib*(lib: PLib, sym: PSym)
-proc makePtrType*(c: PContext, baseType: PType): PType
-proc newTypeS*(kind: TTypeKind, c: PContext): PType
-proc fillTypeS*(dest: PType, kind: TTypeKind, c: PContext)
-
 proc scopeDepth*(c: PContext): int {.inline.} =
   result = if c.currentScope != nil: c.currentScope.depthLevel
            else: 0
 
-# owner handling:
-proc getCurrOwner*(): PSym
-proc pushOwner*(owner: PSym)
-proc popOwner*()
-# implementation
-
 var gOwners*: seq[PSym] = @[]
 
-proc getCurrOwner(): PSym =
+proc getCurrOwner*(): PSym =
   # owner stack (used for initializing the
   # owner field of syms)
   # the documentation comment always gets
@@ -141,37 +134,27 @@ proc getCurrOwner(): PSym =
   # BUGFIX: global array is needed!
   result = gOwners[high(gOwners)]
 
-proc pushOwner(owner: PSym) =
+proc pushOwner*(owner: PSym) =
   add(gOwners, owner)
 
-proc popOwner() =
+proc popOwner*() =
   var length = len(gOwners)
   if length > 0: setLen(gOwners, length - 1)
   else: internalError("popOwner")
 
-proc lastOptionEntry(c: PContext): POptionEntry =
+proc lastOptionEntry*(c: PContext): POptionEntry =
   result = POptionEntry(c.optionStack.tail)
-
-proc pushProcCon*(c: PContext, owner: PSym) {.inline.} =
-  if owner == nil:
-    internalError("owner is nil")
-    return
-  var x: PProcCon
-  new(x)
-  x.owner = owner
-  x.next = c.p
-  c.p = x
 
 proc popProcCon*(c: PContext) {.inline.} = c.p = c.p.next
 
-proc newOptionEntry(): POptionEntry =
+proc newOptionEntry*(): POptionEntry =
   new(result)
   result.options = gOptions
   result.defaultCC = ccDefault
   result.dynlib = nil
   result.notes = gNotes
 
-proc newContext(module: PSym): PContext =
+proc newContext*(graph: ModuleGraph; module: PSym; cache: IdentCache): PContext =
   new(result)
   result.ambiguousSymbols = initIntSet()
   initLinkedList(result.optionStack)
@@ -185,6 +168,10 @@ proc newContext(module: PSym): PContext =
   initStrTable(result.userPragmas)
   result.generics = @[]
   result.unknownIdents = initIntSet()
+  result.cache = cache
+  result.graph = graph
+  initStrTable(result.signatures)
+
 
 proc inclSym(sq: var TSymSeq, s: PSym) =
   var L = len(sq)
@@ -199,16 +186,19 @@ proc addConverter*(c: PContext, conv: PSym) =
 proc addPattern*(c: PContext, p: PSym) =
   inclSym(c.patterns, p)
 
-proc newLib(kind: TLibKind): PLib =
+proc newLib*(kind: TLibKind): PLib =
   new(result)
   result.kind = kind          #initObjectSet(result.syms)
 
-proc addToLib(lib: PLib, sym: PSym) =
+proc addToLib*(lib: PLib, sym: PSym) =
   #if sym.annex != nil and not isGenericRoutine(sym):
   #  LocalError(sym.info, errInvalidPragma)
   sym.annex = lib
 
-proc makePtrType(c: PContext, baseType: PType): PType =
+proc newTypeS*(kind: TTypeKind, c: PContext): PType =
+  result = newType(kind, getCurrOwner())
+
+proc makePtrType*(c: PContext, baseType: PType): PType =
   result = newTypeS(tyPtr, c)
   addSonSkipIntLit(result, baseType.assertNotNil)
 
@@ -225,7 +215,7 @@ proc makeTypeDesc*(c: PContext, typ: PType): PType =
 
 proc makeTypeSymNode*(c: PContext, typ: PType, info: TLineInfo): PNode =
   let typedesc = makeTypeDesc(c, typ)
-  let sym = newSym(skType, idAnon, getCurrOwner(), info).linkTo(typedesc)
+  let sym = newSym(skType, c.cache.idAnon, getCurrOwner(), info).linkTo(typedesc)
   return newSymNode(sym, info)
 
 proc makeTypeFromExpr*(c: PContext, n: PNode): PType =
@@ -253,7 +243,16 @@ proc makeAndType*(c: PContext, t1, t2: PType): PType =
 
 proc makeOrType*(c: PContext, t1, t2: PType): PType =
   result = newTypeS(tyOr, c)
-  result.sons = @[t1, t2]
+  if t1.kind != tyOr and t2.kind != tyOr:
+    result.sons = @[t1, t2]
+  else:
+    template addOr(t1) =
+      if t1.kind == tyOr:
+        for x in t1.sons: result.rawAddSon x
+      else:
+        result.rawAddSon t1
+    addOr(t1)
+    addOr(t2)
   propagateToOwner(result, t1)
   propagateToOwner(result, t2)
   result.flags.incl((t1.flags + t2.flags) * {tfHasStatic})
@@ -287,9 +286,6 @@ template rangeHasStaticIf*(t: PType): bool =
 template getStaticTypeFromRange*(t: PType): PType =
   t.n[1][0][1].typ
 
-proc newTypeS(kind: TTypeKind, c: PContext): PType =
-  result = newType(kind, getCurrOwner())
-
 proc errorType*(c: PContext): PType =
   ## creates a type representing an error state
   result = newTypeS(tyError, c)
@@ -298,7 +294,7 @@ proc errorNode*(c: PContext, n: PNode): PNode =
   result = newNodeI(nkEmpty, n.info)
   result.typ = errorType(c)
 
-proc fillTypeS(dest: PType, kind: TTypeKind, c: PContext) =
+proc fillTypeS*(dest: PType, kind: TTypeKind, c: PContext) =
   dest.kind = kind
   dest.owner = getCurrOwner()
   dest.size = - 1
@@ -313,7 +309,7 @@ proc makeRangeType*(c: PContext; first, last: BiggestInt;
   addSonSkipIntLit(result, intType) # basetype of range
 
 proc markIndirect*(c: PContext, s: PSym) {.inline.} =
-  if s.kind in {skProc, skConverter, skMethod, skIterator, skClosureIterator}:
+  if s.kind in {skProc, skConverter, skMethod, skIterator}:
     incl(s.flags, sfAddrTaken)
     # XXX add to 'c' for global analysis
 

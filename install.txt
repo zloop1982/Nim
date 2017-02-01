@@ -9,7 +9,7 @@ should be in your ``$PATH`` (most likely the case). Note that some few Linux
 distributions do not ship with a GCC compiler preinstalled - then you have to
 install it.
 
-Install Nim by downloading the appropriate ``.zip`` file and extracting it
+Install Nim by downloading the appropriate ``.tar.xz`` file and extracting it
 to a directory of your choice. The Nim Compiler will stay in this
 directory (unless you copy it somewhere else). The compiler does not need
 write access to its directory, so copying the nim folder to ``/opt``
@@ -30,6 +30,16 @@ There are also ``install.sh`` and ``deinstall.sh`` scripts for distributing
 the files over the UNIX hierarchy. However, updating your Nim installation
 is more cumbersome then.
 
+To complete the installation you should also build Nim's tools like
+``nimsuggest``, ``nimble`` or ``nimgrep`` via::
+
+  nim c koch
+  koch tools
+
+Note that these tools should also end up in your ``PATH`` so adding
+``$your_install_dir/bin/nim`` to your ``PATH`` is preferred over the symlink
+solution.
+
 
 Installation on the Macintosh
 -----------------------------
@@ -37,16 +47,15 @@ Installation on the Macintosh
 Only MacOS X is supported.
 Since MacOS X is UNIX based too, it works like the installation on Linux.
 However, for unknown reasons the symbolic link method does not work on MacOS X.
-You need to install Apple's developer's tools for the GNU Compiler Collection.
+You need to install Apple's developer's tools for the GNU Compiler Collection
+or clang.
 
 
 Installation on Windows
 -----------------------
 
-Install Nim by downloading and running the ``nim_$version.exe`` file.
-As default, the ``GCC`` compiler is used that is bundled with this installer.
-You can change the configuration file ``config/nim.cfg`` to use
-another C compiler or change the path to GCC.
+Install Nim by downloading and unzipping the ``nim_$version.zip`` file.
+Run ``finish.exe`` to detect and setup your MingW environment.
 
 Currently, the following C compilers are supported under Windows:
 
@@ -61,8 +70,19 @@ Currently, the following C compilers are supported under Windows:
 
 However, most testing is done with GCC.
 
-Bootstrapping from Github
+Bootstrapping from GitHub
 -------------------------
 
 Take a look at the readme file on github `here <https://github.com/nim-lang/Nim#readme>`_
 for instructions.
+
+
+Installation of Nimble
+----------------------
+
+Nimble is Nim's package manager. For the source based installations where you
+added Nim's ``bin`` directory to your ``$PATH`` the easiest way of installing
+Nimble is via::
+
+  nim c koch
+  koch nimble

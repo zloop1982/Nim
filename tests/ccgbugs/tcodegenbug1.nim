@@ -11,7 +11,7 @@ type
     status*: TStatusEnum
     desc*: string
     hash*: string
-    
+
 proc initStatus*(): TStatus =
   result.status = sUnknown
   result.desc = ""
@@ -49,7 +49,7 @@ proc `$`*(status: TStatusEnum): string =
     return "csource generation succeeded"
   of sUnknown:
     return "unknown"
-    
+
 proc makeCommitPath*(platform, hash: string): string =
   return platform / "nim_" & hash.substr(0, 11) # 11 Chars.
 
@@ -65,3 +65,12 @@ type
 
 # have a proc taking TFlags as param and returning object having TFlags field
 proc foo(flags: TFlags): TObj = nil
+
+
+# bug #5137
+type
+  MyInt {.importc: "int".} = object
+  MyIntDistinct = distinct MyInt
+
+proc bug5137(d: MyIntDistinct) =
+  discard d.MyInt
